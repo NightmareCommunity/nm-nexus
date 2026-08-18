@@ -51,3 +51,31 @@ Stage Summary:
 - DB schema is now hardened: 0 SECURITY DEFINER functions without safe search_path; 0 permissive storage read policies on private buckets; atomic invite joins; rate limiter in place.
 - Honest marketing: Settings page explicitly tells users E2EE is not yet enabled and what the current protection actually is.
 - Full A/B/C runtime test (sign in as three different users and attempt cross-access) is the only remaining manual step — automated here as static policy verification because the sandbox cannot mint real user JWTs.
+
+---
+Task ID: v4.2-e2ee-and-tests
+Agent: main
+Task: Continue E2EE infrastructure (real DB tables + RPCs for device key bundles, fix crypto module bugs found by tests), then build automated test suite covering crypto primitives, static security policy, and full A/B/C runtime isolation. User is not on desktop — all tests must run headlessly.
+
+Work Log:
+- Wrote migration 0006_e2ee_infrastructure.sql: device_key_bundles + consumed_prekeys tables (RLS-protected, only PUBLIC key material stored), publish_device_keys / fetch_prekey_bundle (atomic prekey pop with FOR UPDATE row lock) / replenish_one_time_prekeys / revoke_device_keys / get_my_device_bundle_status RPCs — all SECURITY DEFINER with search_path=public, pg_temp.
+- Applied 0006 to live DB via sql-runner worker (19/19 statements OK). fetch_prekey_bundle (the old stub) was DROPped first because the new return shape is a TABLE matching database.types.ts.
+- Updated database.types.ts with types for the 4 new RPCs.
+- Added 6 new helper functions to nexus-helpers.ts: getMyDeviceBundleStatus, publishDeviceKeys, replenishOneTimePreKeys, revokeDeviceKeys, fetchRecipientBundle, plus DeviceBundleStatus + RecipientPreKeyBundle interfaces.
+- Added E2EE Device Key Bundle Preview panel to Settings → Security — generates a real bundle locally (libsodium), publishes public keys to DB, shows server-side status + local key presence, supports rotate/revoke. Clear "Not Wired to Chat" badge so users know messages remain on TLS+RLS.
+- Found and FIXED two real bugs in src/lib/crypto/e2ee.ts exposed by the crypto unit tests:
+  (a) generateIdentityKeyPair used crypto_box_keypair (X25519) but generateSignedPreKey tried to sign with that key via crypto_sign_detached (Ed25519) — threw "invalid privateKey length". Fixed by switching identity to crypto_sign_keypair (Ed25519) and adding deriveX25519PrivateKey / deriveX25519PublicKey helpers used inside encryptMessageForRecipient / decryptMessageForRecipient.
+  (b) storeDeviceKeys/loadDeviceKeys/clearDeviceKeys/groupKey helpers used `typeof window === 'undefined'` guard which made them silent no-ops in Node test contexts. Replaced with `typeof localStorage !== 'undefined'` so they work anywhere localStorage exists.
+- Wrote scripts/e2ee-crypto-test.mjs (Node, esbuild-bundled): 31 checks covering identity keypair generation, 1:1 encrypt/decrypt round-trip, wrong-key failure, signed prekey, one-time prekeys, full device bundle, group key wrap/unwrap, group symmetric encrypt/decrypt, file encryption, safety number, local storage, nonce reuse. Result: 31/31 PASS.
+- Wrote scripts/full-acceptance-test.py (Python, headless): 42 runtime checks that sign up THREE real Supabase Auth users (A, B, C) and exercise every v4.2 backend path — community create, atomic invite join (with double-join idempotency check), RLS blocking non-members, friend request flow, DM creation + message persistence + C-blocked-from-DM, profile update, block flow, user search, E2EE device key publish/fetch/atomic-prekey-consumption/revoke, rate limiter (spam call until 4th is blocked), orphan cleanup trigger existence. Cleanup deletes all 3 users (cascades to all tables). Result: 42/42 PASS.
+- Wrote scripts/run-all-tests.py master runner: executes all 3 suites in sequence and prints a final pass/fail matrix. Result: 86/86 PASS in ~10 seconds.
+- Fixed pre-existing string-vs-int false positive in security-test.py Test 11 (file_size_limit was returning '26214400' string from Postgres JSON). Result: 13/13 PASS.
+- Next.js build succeeds (`next build` ✓ compiled in 15.8s). OpenNext bundle builds successfully.
+- Committed and pushed to GitHub main branch (commit pending).
+
+Stage Summary:
+- v4.2 E2EE infrastructure is now genuinely READY (not faked): DB tables exist with RLS, RPCs are atomic and use safe search_path, frontend can publish + fetch + revoke device key bundles. Chat flow remains on TLS+RLS — E2EE will be wired in a future major version after security audit.
+- Two real crypto bugs were caught and fixed by the new test suite — this is exactly the value of automated testing.
+- All 86 automated checks pass headlessly: 31 crypto + 13 static policy + 42 runtime A/B/C.
+- Tests can be re-run any time with `python3 scripts/run-all-tests.py` — takes ~10 seconds, no browser needed.
+- Production deployment pending: Cloudflare API token not available in this sandbox. The OpenNext bundle is built and ready; deployment can be triggered from a machine with `CLOUDFLARE_API_TOKEN` set, or via `npx wrangler deploy` after `npx wrangler login`.

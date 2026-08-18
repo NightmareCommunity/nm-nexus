@@ -13,10 +13,23 @@ import { Switch } from '@/components/ui/switch';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   User, Shield, Bell, Palette, Smartphone, Lock, LogOut,
-  ChevronLeft, Check, Upload, Loader2,
+  ChevronLeft, Check, Upload, Loader2, KeyRound, RefreshCw, AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import {
+  getMyDeviceBundleStatus,
+  publishDeviceKeys,
+  revokeDeviceKeys,
+  type DeviceBundleStatus,
+} from '@/lib/nexus-helpers';
+import {
+  generateDeviceKeyBundle,
+  storeDeviceKeys,
+  loadDeviceKeys,
+  clearDeviceKeys,
+  type StoredDeviceKeys,
+} from '@/lib/crypto/e2ee';
 
 const SECTIONS = [
   { id: 'account', label: 'My Account', icon: User },
@@ -37,11 +50,73 @@ export function SettingsView({ mobile = false }: { mobile?: boolean }) {
   const [bio, setBio] = useState(profile?.bio || '');
   const [customStatus, setCustomStatus] = useState(profile?.custom_status || '');
 
+  // ── E2EE preview state ──
+  const [deviceStatus, setDeviceStatus] = useState<DeviceBundleStatus | null>(null);
+  const [localKeys, setLocalKeys] = useState<StoredDeviceKeys | null>(null);
+  const [e2eeBusy, setE2eeBusy] = useState(false);
+
   useEffect(() => {
     setDisplayName(profile?.display_name || '');
     setBio(profile?.bio || '');
     setCustomStatus(profile?.custom_status || '');
   }, [profile]);
+
+  // Load E2EE status when entering the Security section.
+  useEffect(() => {
+    if (settingsSection !== 'security' || !profile?.id) return;
+    void (async () => {
+      const status = await getMyDeviceBundleStatus();
+      setDeviceStatus(status);
+      if (profile.id) setLocalKeys(loadDeviceKeys(profile.id));
+    })();
+  }, [settingsSection, profile?.id]);
+
+  const generateAndPublishDeviceKeys = async () => {
+    if (!profile?.id) return;
+    setE2eeBusy(true);
+    try {
+      const bundle = await generateDeviceKeyBundle(50);
+      const stored: StoredDeviceKeys = {
+        identity: bundle.identity,
+        signedPreKey: bundle.signedPreKey,
+        createdAt: bundle.createdAt,
+      };
+      storeDeviceKeys(profile.id, stored);
+      setLocalKeys(stored);
+      const publishedAt = await publishDeviceKeys(
+        bundle.identity.publicKey,
+        bundle.signedPreKey.publicKey,
+        bundle.signedPreKey.signature,
+        bundle.oneTimePreKeys.map((k) => ({ key_id: k.keyId, public: k.publicKey }))
+      );
+      if (publishedAt) {
+        toast.success('Device key bundle published (E2EE preview). Messages remain on TLS+RLS until E2EE ships.');
+        const status = await getMyDeviceBundleStatus();
+        setDeviceStatus(status);
+      }
+    } catch (e: any) {
+      toast.error(`Failed to publish device keys: ${e?.message ?? e}`);
+    } finally {
+      setE2eeBusy(false);
+    }
+  };
+
+  const rotateDeviceKeys = async () => {
+    if (!profile?.id) return;
+    setE2eeBusy(true);
+    try {
+      const ok = await revokeDeviceKeys();
+      if (ok) {
+        clearDeviceKeys(profile.id);
+        setLocalKeys(null);
+        toast.success('Device keys revoked. New sessions cannot be established until you publish a fresh bundle.');
+        const status = await getMyDeviceBundleStatus();
+        setDeviceStatus(status);
+      }
+    } finally {
+      setE2eeBusy(false);
+    }
+  };
 
   const saveProfile = async (patch: any) => {
     setSaving(true);
@@ -363,6 +438,92 @@ export function SettingsView({ mobile = false }: { mobile?: boolean }) {
                 <p className="text-xs text-muted-foreground/70 font-mono">
                   {settings?.identity_key_public ? settings.identity_key_public.slice(0, 32) + '…' : 'Identity key not yet generated (E2EE disabled)'}
                 </p>
+              </div>
+
+              {/* E2EE Device Key Bundle Preview */}
+              <div className="rounded-lg bg-[#13101a] border border-amber-500/20 p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <KeyRound className="h-4 w-4 text-amber-400" />
+                  <span className="text-sm font-medium text-white">
+                    Device Key Bundle — Preview
+                  </span>
+                  <span className="ml-auto text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                    Not Wired to Chat
+                  </span>
+                </div>
+
+                <div className="flex items-start gap-2 text-xs text-amber-300/80 bg-amber-500/5 border border-amber-500/20 rounded-md p-2">
+                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <span>
+                    Publishing a device key bundle does <strong>not</strong> enable E2EE for your
+                    messages today. It only registers your public key material so future E2EE-capable
+                    clients can find it. Messages remain protected by TLS + Supabase RLS.
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <div className="text-muted-foreground mb-1">Server bundle</div>
+                    {deviceStatus?.has_bundle ? (
+                      <div className="text-emerald-400 font-medium">
+                        Published
+                        <div className="text-[10px] text-muted-foreground mt-0.5">
+                          {deviceStatus.remaining_one_time_prekeys ?? 0} one-time prekeys remaining
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-muted-foreground/70">Not published</div>
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-muted-foreground mb-1">Local private keys</div>
+                    {localKeys ? (
+                      <div className="text-emerald-400 font-medium">
+                        Present (this device)
+                        <div className="text-[10px] text-muted-foreground mt-0.5">
+                          Created {new Date(localKeys.createdAt).toLocaleDateString()}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-muted-foreground/70">Not generated</div>
+                    )}
+                  </div>
+                </div>
+
+                {localKeys && (
+                  <div className="text-[10px] font-mono text-muted-foreground/60 break-all">
+                    {localKeys.identity.publicKey.slice(0, 64)}…
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={generateAndPublishDeviceKeys}
+                    disabled={e2eeBusy}
+                    className="h-8"
+                  >
+                    {e2eeBusy ? (
+                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <KeyRound className="h-3.5 w-3.5 mr-1.5" />
+                    )}
+                    {localKeys ? 'Re-publish bundle' : 'Generate & publish'}
+                  </Button>
+                  {localKeys && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={rotateDeviceKeys}
+                      disabled={e2eeBusy}
+                      className="h-8 text-amber-300 hover:text-amber-200"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                      Revoke (rotate)
+                    </Button>
+                  )}
+                </div>
               </div>
             </>
           )}

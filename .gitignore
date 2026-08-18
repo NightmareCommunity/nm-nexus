@@ -104,3 +104,6 @@ download/*.jpeg
 
 # v4.1 SQL runner worker (deployed separately, kept locally)
 sql-runner/
+
+# v4.2 test bundle temp files
+scripts/_e2ee_bundle.*

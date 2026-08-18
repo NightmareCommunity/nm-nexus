@@ -142,13 +142,44 @@ export function randomUuid(): string {
 // Key generation
 // ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Generate the user's LONG-TERM IDENTITY keypair.
+ *
+ * In the Signal protocol, the identity key is an Ed25519 SIGNING keypair.
+ * It is used to sign signed prekeys (so recipients can verify they came from
+ * the claimed identity). For ECDH operations (establishing shared secrets),
+ * we derive the X25519 equivalent on demand via `crypto_sign_ed25519_sk_to_curve25519`.
+ *
+ * We store BOTH the Ed25519 keypair (for signing) AND the derived X25519
+ * keypair (for ECDH) so we don't have to recompute the derivation on every
+ * message.
+ */
 export async function generateIdentityKeyPair(): Promise<IdentityKeyPair> {
   const s = await getSodium();
-  const { publicKey, privateKey } = s.crypto_box_keypair();
+  const { publicKey, privateKey } = s.crypto_sign_keypair();
   return {
     publicKey: bytesToBase64(publicKey),
     privateKey: bytesToBase64(privateKey),
   };
+}
+
+/**
+ * Derive the X25519 (ECDH) private key from an Ed25519 identity private key.
+ * Used internally before all crypto_box / crypto_aead operations.
+ */
+async function deriveX25519PrivateKey(ed25519PrivateKeyB64: string): Promise<Uint8Array> {
+  const s = await getSodium();
+  return s.crypto_sign_ed25519_sk_to_curve25519(base64ToBytes(ed25519PrivateKeyB64));
+}
+
+/**
+ * Derive the X25519 (ECDH) public key from an Ed25519 identity public key.
+ * Used when computing shared secrets with a recipient whose identity key
+ * was published as Ed25519.
+ */
+async function deriveX25519PublicKey(ed25519PublicKeyB64: string): Promise<Uint8Array> {
+  const s = await getSodium();
+  return s.crypto_sign_ed25519_pk_to_curve25519(base64ToBytes(ed25519PublicKeyB64));
 }
 
 export async function generateSigningKeyPair(): Promise<{
@@ -167,6 +198,8 @@ export async function generateSignedPreKey(
   signingPrivateKey: string
 ): Promise<SignedPreKeyPair> {
   const s = await getSodium();
+  // The signed prekey itself is an X25519 keypair (used for ECDH), but the
+  // signature is produced with the Ed25519 identity private key.
   const { publicKey, privateKey } = s.crypto_box_keypair();
   const signature = s.crypto_sign_detached(
     publicKey,
@@ -204,15 +237,19 @@ export async function generateDeviceKeyBundle(
 // ECDH shared secret derivation
 // ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Derive an ECDH shared secret using the sender's identity Ed25519 private key
+ * (converted to X25519 on the fly) and the recipient's identity Ed25519
+ * public key (also converted to X25519).
+ */
 async function deriveSharedSecret(
-  myPrivateKey: string,
-  theirPublicKey: string
+  myEd25519PrivateKey: string,
+  theirEd25519PublicKey: string
 ): Promise<Uint8Array> {
   const s = await getSodium();
-  return s.crypto_box_beforenm(
-    base64ToBytes(theirPublicKey),
-    base64ToBytes(myPrivateKey)
-  );
+  const myX25519Priv = await deriveX25519PrivateKey(myEd25519PrivateKey);
+  const theirX25519Pub = await deriveX25519PublicKey(theirEd25519PublicKey);
+  return s.crypto_box_beforenm(theirX25519Pub, myX25519Priv);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -221,8 +258,21 @@ async function deriveSharedSecret(
 
 /**
  * Encrypt a plaintext message body for a recipient.
- * Uses X25519 ECDH + XChaCha20-Poly1305.
- * Returns a payload suitable for storing in messages.encrypted_payload.
+ *
+ * Protocol (simplified X3DH-style):
+ *   1. Sender generates a fresh ephemeral X25519 keypair for THIS message.
+ *   2. Sender derives shared secret = ECDH(ephemeral_priv, recipient_identity_X25519_pub).
+ *      The recipient's identity key is published as Ed25519; we convert to X25519 here.
+ *   3. Sender encrypts plaintext with XChaCha20-Poly1305 using the shared secret.
+ *   4. Sender transmits (ciphertext, nonce, ephemeral_pub) — recipient derives the same
+ *      shared secret = ECDH(my_identity_X25519_priv, ephemeral_pub) and decrypts.
+ *
+ * NOTE: In a full X3DH, the sender would ALSO mix in their own identity key
+ * and the recipient's signed prekey / one-time prekey. This simplified version
+ * is sufficient for the prep architecture — it provides forward secrecy per
+ * message (ephemeral keys) but does not yet provide sender authentication.
+ * Sender authentication will be added when the full X3DH + Double Ratchet
+ * is wired.
  */
 export async function encryptMessageForRecipient(
   plaintext: string,
@@ -232,12 +282,11 @@ export async function encryptMessageForRecipient(
   const s = await getSodium();
   // 1. Ephemeral X25519 keypair for this message
   const ephemeral = s.crypto_box_keypair();
-  // 2. Derive shared secret: ephemeral_priv × recipient_pub
-  const sharedSecret = s.crypto_box_beforenm(
-    base64ToBytes(recipientIdentityPublicKey),
-    ephemeral.privateKey
-  );
-  // 3. Encrypt with XChaCha20-Poly1305 (nonce is 24 bytes for XChaCha20)
+  // 2. Convert recipient's Ed25519 identity public key → X25519 for ECDH
+  const recipientX25519Pub = await deriveX25519PublicKey(recipientIdentityPublicKey);
+  // 3. Derive shared secret: ephemeral_priv × recipient_X25519_pub
+  const sharedSecret = s.crypto_box_beforenm(recipientX25519Pub, ephemeral.privateKey);
+  // 4. Encrypt with XChaCha20-Poly1305 (nonce is 24 bytes for XChaCha20)
   const nonce = s.randombytes_buf(s.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
   const ciphertext = s.crypto_aead_xchacha20poly1305_ietf_encrypt(
     utf8ToBytes(plaintext),
@@ -256,17 +305,22 @@ export async function encryptMessageForRecipient(
 
 /**
  * Decrypt a message encrypted with encryptMessageForRecipient.
- * Uses recipient's identity private key + sender's ephemeral public key.
+ *
+ * Derives the same shared secret using the recipient's identity Ed25519
+ * private key (converted to X25519) and the sender's ephemeral X25519
+ * public key.
  */
 export async function decryptMessageForRecipient(
   payload: EncryptedPayload,
   recipientIdentityPrivateKey: string
 ): Promise<string> {
   const s = await getSodium();
-  // Derive same shared secret: my_priv × sender_ephemeral_pub
+  // Convert my Ed25519 identity private key → X25519 for ECDH
+  const myX25519Priv = await deriveX25519PrivateKey(recipientIdentityPrivateKey);
+  // Derive same shared secret: my_X25519_priv × sender_ephemeral_pub
   const sharedSecret = s.crypto_box_beforenm(
     base64ToBytes(payload.ephemeralKey),
-    base64ToBytes(recipientIdentityPrivateKey)
+    myX25519Priv
   );
   const plaintext = s.crypto_aead_xchacha20poly1305_ietf_decrypt(
     null,                          // nsec
@@ -420,13 +474,15 @@ export interface StoredDeviceKeys {
   createdAt: number;
 }
 
+const _hasLocalStorage = typeof localStorage !== 'undefined';
+
 export function storeDeviceKeys(userId: string, keys: StoredDeviceKeys): void {
-  if (typeof window === 'undefined') return;
+  if (!_hasLocalStorage) return;
   localStorage.setItem(STORAGE_PREFIX + userId, JSON.stringify(keys));
 }
 
 export function loadDeviceKeys(userId: string): StoredDeviceKeys | null {
-  if (typeof window === 'undefined') return null;
+  if (!_hasLocalStorage) return null;
   const raw = localStorage.getItem(STORAGE_PREFIX + userId);
   if (!raw) return null;
   try {
@@ -437,7 +493,7 @@ export function loadDeviceKeys(userId: string): StoredDeviceKeys | null {
 }
 
 export function clearDeviceKeys(userId: string): void {
-  if (typeof window === 'undefined') return;
+  if (!_hasLocalStorage) return;
   localStorage.removeItem(STORAGE_PREFIX + userId);
 }
 
@@ -446,17 +502,17 @@ export function clearDeviceKeys(userId: string): void {
 const GROUP_KEY_PREFIX = 'nm_nexus_groupkey_v1_';
 
 export function storeGroupKey(conversationId: string, key: string): void {
-  if (typeof window === 'undefined') return;
+  if (!_hasLocalStorage) return;
   localStorage.setItem(GROUP_KEY_PREFIX + conversationId, key);
 }
 
 export function loadGroupKey(conversationId: string): string | null {
-  if (typeof window === 'undefined') return null;
+  if (!_hasLocalStorage) return null;
   return localStorage.getItem(GROUP_KEY_PREFIX + conversationId);
 }
 
 export function clearGroupKey(conversationId: string): void {
-  if (typeof window === 'undefined') return;
+  if (!_hasLocalStorage) return;
   localStorage.removeItem(GROUP_KEY_PREFIX + conversationId);
 }
 

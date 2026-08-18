@@ -126,13 +126,19 @@ check("check_rate_limit RPC exists", ok)
 # Test 10: attachments bucket is private
 r = run_sql("SELECT public FROM storage.buckets WHERE id='attachments';")
 rows = r['results'][0].get('rows', [])
-ok = rows and rows[0].get('public') == False
+# Postgres may return boolean as Python bool or string; coerce.
+val = rows[0].get('public') if rows else None
+if isinstance(val, str):
+    val = val.lower() == 'true'
+ok = rows and val == False
 check("attachments bucket is private (public=false)", ok)
 
 # Test 11: attachments bucket has file_size_limit set (25 MB)
 r = run_sql("SELECT file_size_limit FROM storage.buckets WHERE id='attachments';")
 rows = r['results'][0].get('rows', [])
-ok = rows and rows[0].get('file_size_limit') == 26214400
+# Postgres returns bigints as strings in JSON, so coerce to int.
+val = int(rows[0].get('file_size_limit')) if rows and rows[0].get('file_size_limit') is not None else None
+ok = val == 26214400
 check("attachments bucket file_size_limit = 25 MB", ok, f"got: {rows}")
 
 # Test 12: orphan cleanup trigger exists on messages

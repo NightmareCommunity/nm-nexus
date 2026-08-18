@@ -656,3 +656,98 @@ export async function checkRateLimit(
   }
   return !!data;
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// E2EE — Device Key Bundle publishing (PREVIEW, NOT WIRED TO CHAT FLOW).
+//
+// These helpers let a user publish their device's PUBLIC key material to the
+// server so future E2EE-capable clients can fetch it. The actual chat flow
+// still uses plaintext_body + TLS + RLS — these helpers exist to prepare the
+// ground for a future E2EE release. See src/lib/crypto/e2ee.ts.
+// ─────────────────────────────────────────────────────────────────────
+
+export interface DeviceBundleStatus {
+  has_bundle: boolean;
+  published_at?: string;
+  rotated_at?: string | null;
+  remaining_one_time_prekeys?: number;
+}
+
+export async function getMyDeviceBundleStatus(): Promise<DeviceBundleStatus | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc('get_my_device_bundle_status');
+  if (error) {
+    console.warn('getMyDeviceBundleStatus failed', error);
+    return null;
+  }
+  return data as DeviceBundleStatus;
+}
+
+export async function publishDeviceKeys(
+  identityPublicKey: string,
+  signedPreKeyPublic: string,
+  signedPreKeySignature: string,
+  oneTimePreKeys: { key_id: string; public: string }[]
+): Promise<string | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc('publish_device_keys', {
+    p_identity_public_key: identityPublicKey,
+    p_signed_prekey_public: signedPreKeyPublic,
+    p_signed_prekey_signature: signedPreKeySignature,
+    p_one_time_prekeys: oneTimePreKeys,
+  });
+  if (error) {
+    console.error('publishDeviceKeys failed', error);
+    toast.error(`Failed to publish device keys: ${error.message}`);
+    return null;
+  }
+  return data as string;
+}
+
+export async function replenishOneTimePreKeys(
+  newPreKeys: { key_id: string; public: string }[]
+): Promise<number | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc('replenish_one_time_prekeys', {
+    p_new_prekeys: newPreKeys,
+  });
+  if (error) {
+    console.error('replenishOneTimePreKeys failed', error);
+    return null;
+  }
+  return data as number;
+}
+
+export async function revokeDeviceKeys(): Promise<boolean> {
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc('revoke_device_keys');
+  if (error) {
+    console.error('revokeDeviceKeys failed', error);
+    toast.error(`Failed to revoke device keys: ${error.message}`);
+    return false;
+  }
+  return !!data;
+}
+
+export interface RecipientPreKeyBundle {
+  identity_key: string;
+  signed_prekey: string;
+  signed_prekey_sig: string;
+  one_time_prekey: string | null;
+  device_id: string;
+}
+
+export async function fetchRecipientBundle(
+  recipientId: string
+): Promise<RecipientPreKeyBundle | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc('fetch_prekey_bundle', {
+    p_recipient_id: recipientId,
+  });
+  if (error) {
+    console.error('fetchRecipientBundle failed', error);
+    return null;
+  }
+  if (!data || (Array.isArray(data) && data.length === 0)) return null;
+  return Array.isArray(data) ? (data[0] as RecipientPreKeyBundle) : (data as RecipientPreKeyBundle);
+}

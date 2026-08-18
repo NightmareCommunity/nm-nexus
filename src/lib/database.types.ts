@@ -767,6 +767,25 @@ export interface Database {
       delete_channel: { Args: { p_channel_id: string }; Returns: boolean };
       cleanup_stale_voice_states: { Args: Record<string, never>; Returns: number };
       cleanup_stale_calls: { Args: Record<string, never>; Returns: number };
+      // ── E2EE infrastructure (v4.2) — see src/lib/crypto/e2ee.ts ──
+      publish_device_keys: {
+        Args: {
+          p_identity_public_key: string;
+          p_signed_prekey_public: string;
+          p_signed_prekey_signature: string;
+          p_one_time_prekeys: unknown; // jsonb array of { key_id, public }
+        };
+        Returns: string; // published_at timestamp
+      };
+      replenish_one_time_prekeys: {
+        Args: { p_new_prekeys: unknown }; // jsonb array
+        Returns: number; // remaining count
+      };
+      revoke_device_keys: { Args: Record<string, never>; Returns: boolean };
+      get_my_device_bundle_status: {
+        Args: Record<string, never>;
+        Returns: unknown; // jsonb { has_bundle, published_at?, rotated_at?, remaining_one_time_prekeys? }
+      };
     };
 
     Enums: {
