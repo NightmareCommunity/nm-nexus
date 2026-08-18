@@ -23,6 +23,7 @@ export function ChannelSidebar() {
     setActiveConversation, setActiveChannel, setActiveView, setActiveCommunity,
     setMobileSheetOpen,
   } = useUIStore();
+  console.log('ChannelSidebar render:', { activeView, activeCommunityId, activeChannelId, activeConversationId });
   const [search, setSearch] = useState('');
   const [dmList, setDmList] = useState<(Conversation & { other_user?: Profile; last_message?: string })[]>([]);
   const [communities, setCommunities] = useState<Community[]>([]);
@@ -40,8 +41,7 @@ export function ChannelSidebar() {
       .select('conversation_id, last_read_message_id')
       .eq('user_id', user.id);
 
-    if (!memberships) return;
-    const convIds = memberships.map((m) => m.conversation_id);
+    const convIds = (memberships || []).map((m) => m.conversation_id);
     if (convIds.length === 0) {
       setDmList([]);
     } else {
@@ -73,21 +73,25 @@ export function ChannelSidebar() {
     }
 
     // Communities + their channels
-    const { data: myCommunities } = await supabase
+    const { data: myCommunities, error: comErr } = await supabase
       .from('community_members')
       .select('community_id, communities!inner(*)')
       .eq('user_id', user.id);
+    if (comErr) console.warn('community load err', comErr);
     const comms = (myCommunities || []).map((m: any) => m.communities as Community);
     setCommunities(comms);
 
     // If a community is active, load its channels
     const targetCommunityId = activeCommunityId || comms[0]?.id;
+    console.log('ChannelSidebar loadAll:', { activeCommunityId, commsCount: comms.length, targetCommunityId, firstCommId: comms[0]?.id });
     if (targetCommunityId) {
-      const { data: chans } = await supabase
+      const { data: chans, error: chanErr } = await supabase
         .from('channels')
         .select('*')
         .eq('community_id', targetCommunityId)
         .order('position', { ascending: true });
+      console.log('channels query result:', { count: chans?.length, err: chanErr?.message });
+      if (chanErr) console.warn('channels load err', chanErr);
       setChannels(chans || []);
       setActiveCommunity(targetCommunityId);
     }

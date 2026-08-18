@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 export function AppShell() {
   const { user, initialized, initError, init, retryInit } = useAuthStore();
   const { rightPanelOpen, callOverlayOpen, activeConversationId, activeChannelId, activeView } = useUIStore();
+  console.log('AppShell render:', { activeView, activeConversationId, activeChannelId, user: !!user, initialized });
 
   useEffect(() => {
     init();

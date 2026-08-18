@@ -67,7 +67,7 @@ export function CommunitiesView({ mobile = false }: { mobile?: boolean }) {
     await supabase.from('channels').insert([
       { community_id: comm.id, name: 'general', type: 'text', position: 0 },
       { community_id: comm.id, name: 'announcements', type: 'text', position: 1 },
-      { community_id: comm.id, name: 'Lounge', type: 'voice', position: 2 },
+      { community_id: comm.id, name: 'lounge', type: 'voice', position: 2 },
     ]);
     toast.success('Community created');
     setCreateOpen(false);
