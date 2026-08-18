@@ -18,11 +18,11 @@ interface CallState {
 
 export function CallOverlay() {
   const { user } = useAuthStore();
-  const { setCallOverlayOpen, activeConversationId } = useUIStore();
+  const { callType, callTarget, endCall } = useUIStore();
   const [state, setState] = useState<CallState>({
     status: 'connecting',
     isMuted: false,
-    isVideoOff: false,
+    isVideoOff: callType !== 'video',
     isSpeakerOn: true,
     duration: 0,
   });
@@ -30,11 +30,10 @@ export function CallOverlay() {
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
-  const supabaseRef = useRef(createClient());
 
   // Initialize WebRTC peer connection
   useEffect(() => {
-    if (!user || !activeConversationId) return;
+    if (!user || !callTarget) return;
 
     const init = async () => {
       try {
@@ -66,14 +65,10 @@ export function CallOverlay() {
 
         // 4. ICE candidate handling → push to signaling table
         pcRef.current.onicecandidate = async (e) => {
-          if (e.candidate && user) {
-            await supabaseRef.current.from('call_signaling').insert({
-              call_id: activeConversationId, // simplified — real impl creates a call row first
-              from_user: user.id,
-              to_user: user.id, // placeholder — would be the other participant
-              signal_type: 'ice-candidate',
-              payload: e.candidate.toJSON() as any,
-            });
+          if (e.candidate && user && callTarget) {
+            // Real implementation: create a call row, then push ICE candidates
+            // For now we just log — full signaling is in docs/security/e2ee.md
+            console.debug('ICE candidate for', callTarget.id, e.candidate);
           }
         };
 
@@ -89,7 +84,7 @@ export function CallOverlay() {
       } catch (e: any) {
         toast.error(`Call failed: ${e.message}`);
         setState(prev => ({ ...prev, status: 'ended' }));
-        setTimeout(() => setCallOverlayOpen(false), 1500);
+        setTimeout(() => endCall(), 1500);
       }
     };
 
@@ -105,7 +100,7 @@ export function CallOverlay() {
       localStreamRef.current?.getTracks().forEach(t => t.stop());
       pcRef.current?.close();
     };
-  }, [user, activeConversationId, setCallOverlayOpen]);
+  }, [user, callTarget, endCall]);
 
   const toggleMute = () => {
     const newState = !state.isMuted;
@@ -123,7 +118,7 @@ export function CallOverlay() {
     localStreamRef.current?.getTracks().forEach(t => t.stop());
     pcRef.current?.close();
     setState(prev => ({ ...prev, status: 'ended' }));
-    setTimeout(() => setCallOverlayOpen(false), 500);
+    setTimeout(() => endCall(), 500);
   };
 
   const formatDuration = (s: number) => {

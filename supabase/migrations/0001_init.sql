@@ -937,7 +937,7 @@ security definer
 set search_path = public
 as $$
 declare
-  bundle identity_key text;
+  bundle_identity text;
   bundle_spk text;
   bundle_sig text;
   otp text;

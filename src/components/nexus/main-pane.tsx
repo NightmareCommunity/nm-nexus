@@ -2,9 +2,8 @@
 
 import { useUIStore } from '@/lib/stores/ui-store';
 import { HomeView } from '@/components/nexus/views/home-view';
-import { DmsView } from '@/components/nexus/views/dms-view';
+import { FriendsView } from '@/components/nexus/views/friends-view';
 import { CommunitiesView } from '@/components/nexus/views/communities-view';
-import { ContactsView } from '@/components/nexus/views/contacts-view';
 import { CallsView } from '@/components/nexus/views/calls-view';
 import { SettingsView } from '@/components/nexus/views/settings-view';
 import { ChatPane } from '@/components/nexus/chat/chat-pane';
@@ -19,7 +18,7 @@ export function MainPane({ mobile = false }: { mobile?: boolean }) {
     }
     switch (mobileTab) {
       case 'home': return <HomeView mobile />;
-      case 'chats': return <DmsView mobile />;
+      case 'chats': return <ChatPane mobile />;
       case 'communities': return <CommunitiesView mobile />;
       case 'calls': return <CallsView mobile />;
       case 'settings': return <SettingsView mobile />;
@@ -33,9 +32,8 @@ export function MainPane({ mobile = false }: { mobile?: boolean }) {
 
   switch (activeView) {
     case 'home': return <HomeView />;
-    case 'dms': return <DmsView />;
+    case 'friends': return <FriendsView />;
     case 'communities': return <CommunitiesView />;
-    case 'contacts': return <ContactsView />;
     case 'calls': return <CallsView />;
     case 'settings': return <SettingsView />;
     default: return <HomeView />;

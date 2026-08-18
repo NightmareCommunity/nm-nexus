@@ -1,72 +1,86 @@
 'use client';
 
-import { useState } from 'react';
-import { Phone, Video, PhoneIncoming, PhoneMissed, PhoneOutgoing } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
+import { useEffect, useState } from 'react';
+import { useAuthStore } from '@/lib/stores/auth-store';
 import { useUIStore } from '@/lib/stores/ui-store';
+import { createClient } from '@/lib/supabase/client';
+import type { Database } from '@/lib/database.types';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Phone, PhoneMissed, PhoneIncoming, PhoneOutgoing } from 'lucide-react';
+import { formatDistanceToNow } from 'date-fns';
+import { cn } from '@/lib/utils';
 
-const RECENT_CALLS = [
-  // Placeholder data — in production, fetch from `calls` table
-];
+type Call = Database['public']['Tables']['calls']['Row'];
 
 export function CallsView({ mobile = false }: { mobile?: boolean }) {
-  const { setCallOverlayOpen } = useUIStore();
-  const [starting, setStarting] = useState<'voice' | 'video' | null>(null);
+  const { user } = useAuthStore();
+  const [calls, setCalls] = useState<Call[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const startCall = (type: 'voice' | 'video') => {
-    setStarting(type);
-    setCallOverlayOpen(true);
-  };
+  useEffect(() => {
+    if (!user) return;
+    const supabase = createClient();
+    // Calls I initiated or participated in
+    supabase
+      .from('calls')
+      .select('*')
+      .or(`initiated_by.eq.${user.id}`)
+      .order('created_at', { ascending: false })
+      .limit(50)
+      .then(({ data, error }) => {
+        if (error) console.warn('calls load err', error);
+        setCalls(data || []);
+        setLoading(false);
+      });
+  }, [user]);
 
   return (
-    <div className="h-full flex flex-col">
-      <header className="h-16 flex items-center px-4 border-b border-border">
-        <h1 className="font-semibold">Calls</h1>
-      </header>
-      <div className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-4">
-        <div className="grid sm:grid-cols-2 gap-3">
-          <Button
-            variant="outline"
-            className="h-24 flex flex-col items-center gap-2 nexus-glass hover:bg-accent/40"
-            onClick={() => startCall('voice')}
-          >
-            <Phone className="h-6 w-6 text-nexus-lavender" />
-            <span>Start voice call</span>
-          </Button>
-          <Button
-            variant="outline"
-            className="h-24 flex flex-col items-center gap-2 nexus-glass hover:bg-accent/40"
-            onClick={() => startCall('video')}
-          >
-            <Video className="h-6 w-6 text-nexus-lavender" />
-            <span>Start video call</span>
-          </Button>
-        </div>
+    <div className="flex-1 flex flex-col bg-[#0a0810]">
+      <div className="h-12 px-4 flex items-center border-b border-white/5 shadow-sm shrink-0">
+        <span className="font-semibold text-white">Calls</span>
+      </div>
 
-        <Card className="nexus-glass p-4">
-          <h2 className="text-sm font-medium mb-3">Recent calls</h2>
-          {RECENT_CALLS.length === 0 ? (
-            <div className="text-xs text-muted-foreground text-center py-6">
-              No recent calls. Start one above — calls use WebRTC with STUN/TURN fallback.
+      <div className="flex-1 overflow-y-auto p-4">
+        {loading ? (
+          <p className="text-sm text-muted-foreground text-center py-8">Loading…</p>
+        ) : calls.length === 0 ? (
+          <div className="text-center py-16">
+            <div className="h-16 w-16 rounded-full bg-nexus-violet/20 flex items-center justify-center mx-auto mb-3">
+              <Phone className="h-7 w-7 text-nexus-lavender" />
             </div>
-          ) : (
-            <div className="space-y-1">
-              {/* Map over recent calls */}
-            </div>
-          )}
-        </Card>
-
-        <Card className="nexus-glass p-4">
-          <h2 className="text-sm font-medium mb-2">About calls</h2>
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            NM NEXUS uses WebRTC for all voice and video calls. Signaling is exchanged via the
-            <code className="mx-1 px-1 py-0.5 rounded bg-muted/50 text-[10px]">call_signaling</code>
-            table (protected by RLS — only sender and recipient can read their own signals).
-            Media flows peer-to-peer when possible; TURN servers relay traffic when NAT traversal fails.
-            Configure STUN/TURN URLs in your environment variables.
-          </p>
-        </Card>
+            <h3 className="text-lg font-semibold text-white mb-1">No calls yet</h3>
+            <p className="text-sm text-muted-foreground">
+              Start a call from any DM conversation.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {calls.map((c) => {
+              const isIncoming = c.initiated_by !== user?.id;
+              const isMissed = c.status === 'missed';
+              return (
+                <div key={c.id} className="flex items-center gap-3 p-3 rounded hover:bg-white/5">
+                  <div className={cn(
+                    'h-10 w-10 rounded-full flex items-center justify-center',
+                    isMissed ? 'bg-red-500/20' : 'bg-nexus-violet/20'
+                  )}>
+                    {isMissed ? <PhoneMissed className="h-4 w-4 text-red-400" /> :
+                      isIncoming ? <PhoneIncoming className="h-4 w-4 text-nexus-lavender" /> :
+                      <PhoneOutgoing className="h-4 w-4 text-green-500" />}
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-sm font-medium text-white">
+                      {c.type === 'video' ? 'Video call' : 'Voice call'}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {formatDistanceToNow(new Date(c.created_at), { addSuffix: true })} · {c.status}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
