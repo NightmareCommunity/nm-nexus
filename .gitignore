@@ -94,3 +94,4 @@ tmp/
 db/*.db
 db/*.db-journal
 .dev.vars
+tsconfig.tsbuildinfo
