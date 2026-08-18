@@ -93,3 +93,4 @@ tmp/
 # ── Local DB ──
 db/*.db
 db/*.db-journal
+.dev.vars

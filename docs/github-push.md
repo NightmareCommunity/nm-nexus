@@ -56,12 +56,12 @@ git push -u origin main
 3. Open `README.md` — should render
 4. Open `.env.example` — should contain placeholders only, no real values
 5. Search the repo for any of these strings — should return ZERO matches:
-   - `ojaskhanna432` (your Postgres password)
-   - `sb_publishable_Wcon7nj0` (your Supabase anon key — even though it's safe to expose, you should rotate it)
-   - `cfat_oINCJY` (your Cloudflare token)
-   - `9dba4b2bcc1c44e30c76b6d50e9ad8c6` (your Cloudflare account ID)
-   - `1481fce8fc8c` (your R2 access key ID)
-   - `7609b4cd9f9533` (your R2 secret access key)
+   - your Postgres password
+   - your Supabase anon key (even though it's safe to expose, you should rotate it)
+   - your Cloudflare token
+   - your Cloudflare account ID
+   - your R2 access key ID
+   - your R2 secret access key
 
 ## 6. Post-push checklist
 

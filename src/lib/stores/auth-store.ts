@@ -44,9 +44,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (get().initialized) return;
     set({ initError: null });
 
-    const supabase = createClient();
+    let supabase;
+    try {
+      supabase = createClient();
+    } catch (e: any) {
+      // Env vars missing — surface error immediately, NEVER hang on spinner.
+      set({
+        initialized: true,
+        initError:
+          e?.message ||
+          'Supabase is not configured. Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY.',
+      });
+      return;
+    }
 
-    // Race getSession against a timeout — NEVER hang the UI forever.
+    // Race getSession against a short timeout — NEVER hang the UI forever.
     let timedOut = false;
     const timeout = new Promise<{ timedOut: true }>((resolve) =>
       setTimeout(() => { timedOut = true; resolve({ timedOut: true }); }, INIT_TIMEOUT_MS)
@@ -88,7 +100,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       set({ initialized: true, initError: null });
 
-      // Listen for subsequent auth changes.
+      // Listen for subsequent auth changes (OAuth callback, sign out, etc.)
       supabase.auth.onAuthStateChange(async (_event, session) => {
         const u = session?.user ?? null;
         set({ user: u });
@@ -99,9 +111,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         }
       });
     } catch (e: any) {
+      const msg = e?.name === 'AbortError'
+        ? 'Network request timed out. Check your connection and retry.'
+        : (e?.message || 'Unexpected error during initialization.');
       set({
         initialized: true,
-        initError: e?.message || 'Unexpected error during initialization.',
+        initError: msg,
       });
     }
   },

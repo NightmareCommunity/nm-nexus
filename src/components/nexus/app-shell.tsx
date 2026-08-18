@@ -11,20 +11,23 @@ import { MemberPanel } from '@/components/nexus/member-panel';
 import { MobileNav } from '@/components/nexus/mobile-nav';
 import { CallOverlay } from '@/components/nexus/calls/call-overlay';
 import { ProfileCardModal } from '@/components/nexus/profile/profile-card-modal';
+import { CommandSearch } from '@/components/nexus/command-search';
 import { Loader2, AlertTriangle, RotateCcw } from 'lucide-react';
 import { BrandMark } from '@/components/nexus/auth/auth-screen';
 import { Button } from '@/components/ui/button';
 
 export function AppShell() {
   const { user, initialized, initError, init, retryInit } = useAuthStore();
-  const { rightPanelOpen, callOverlayOpen, activeConversationId, activeChannelId, activeView } = useUIStore();
-  console.log('AppShell render:', { activeView, activeConversationId, activeChannelId, user: !!user, initialized });
+  const {
+    rightPanelOpen, callOverlayOpen, activeConversationId, activeChannelId, activeView,
+    commandOpen, setCommandOpen,
+  } = useUIStore();
 
   useEffect(() => {
     init();
   }, [init]);
 
-  // Loading state — but capped by init() timeout (8s). Never infinite.
+  // Loading state — capped by init() timeout (8s). Never infinite.
   if (!initialized) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-6">
@@ -95,6 +98,7 @@ export function AppShell() {
       {/* Overlays */}
       {callOverlayOpen && <CallOverlay />}
       <ProfileCardModal />
+      <CommandSearch open={commandOpen} onOpenChange={setCommandOpen} />
     </div>
   );
 }

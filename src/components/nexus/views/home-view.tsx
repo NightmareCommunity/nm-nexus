@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client';
 import type { Database } from '@/lib/database.types';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
-import { MessageSquare, Users, Phone, Bell, ChevronRight, Clock } from 'lucide-react';
+import { MessageSquare, Users, Phone, Bell, ChevronRight, Clock, Search } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
 type Profile = Database['public']['Tables']['profiles']['Row'];
@@ -21,7 +21,7 @@ interface DmPreview extends Conversation {
 
 export function HomeView({ mobile = false }: { mobile?: boolean }) {
   const { user, profile } = useAuthStore();
-  const { setActiveView, setActiveConversation, setActiveProfileUserId } = useUIStore();
+  const { setActiveView, setActiveConversation, setActiveProfileUserId, setCommandOpen } = useUIStore();
   const [recentDms, setRecentDms] = useState<DmPreview[]>([]);
   const [onlineFriends, setOnlineFriends] = useState<Profile[]>([]);
   const [pendingRequests, setPendingRequests] = useState(0);
@@ -108,8 +108,8 @@ export function HomeView({ mobile = false }: { mobile?: boolean }) {
               </AvatarFallback>
             )}
           </Avatar>
-          <div>
-            <h1 className="text-2xl font-bold text-white">
+          <div className="flex-1 min-w-0">
+            <h1 className="text-2xl font-bold text-white truncate">
               Welcome back, {profile?.display_name || profile?.username || 'friend'}.
             </h1>
             <p className="text-sm text-muted-foreground">
@@ -118,6 +118,15 @@ export function HomeView({ mobile = false }: { mobile?: boolean }) {
                 : 'Start a conversation with someone.'}
             </p>
           </div>
+          <Button
+            onClick={() => setCommandOpen(true)}
+            variant="outline"
+            className="gap-2 shrink-0"
+          >
+            <Search className="h-4 w-4" />
+            <span className="hidden sm:inline">Search</span>
+            <kbd className="hidden md:inline text-[10px] px-1 py-0.5 rounded bg-white/10">⌘K</kbd>
+          </Button>
         </div>
       </div>
 

@@ -1,10 +1,10 @@
 // NM NEXUS Service Worker
 // Caches app shell only — NEVER caches private message content or keys.
-const CACHE = 'nm-nexus-v1';
-const ASSETS = ['/', '/manifest.webmanifest', '/icon.svg', '/icon-maskable.svg'];
+const CACHE = 'nm-nexus-v2';
+const ASSETS = ['/', '/manifest.webmanifest', '/icon.svg', '/icon-maskable.svg', '/logo.png'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).catch(() => {}));
   self.skipWaiting();
 });
 
@@ -28,7 +28,7 @@ self.addEventListener('fetch', (e) => {
     e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
     return;
   }
-  // Network-first for everything else
+  // Network-first for everything else — fall back to cached root only on offline
   e.respondWith(
     fetch(e.request).catch(() => caches.match(e.request).then(r => r || caches.match('/')))
   );

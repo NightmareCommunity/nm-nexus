@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   ArrowLeft, Send, Paperclip, Phone, Video, MoreVertical,
-  Smile, Reply, Edit2, Trash2, Hash, Volume2, Users, X, Check
+  Smile, Reply, Edit2, Trash2, Hash, Volume2, Users, X, Check, Loader2
 } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -61,8 +61,18 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [pendingAttachment, setPendingAttachment] = useState<{
+    name: string;
+    size: number;
+    type: string;
+    preview?: string;
+    path?: string;
+    publicUrl?: string;
+  } | null>(null);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isActive = activeConversationId || activeChannelId;
 
@@ -249,10 +259,24 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
   }, [user, activeConversationId]);
 
   const sendMessage = async () => {
-    if (!user || !isActive || !input.trim()) return;
+    if (!user || !isActive) return;
+    if (!input.trim() && !pendingAttachment) return;
     setSending(true);
-    const body = input.trim();
+    let body = input.trim();
+    if (pendingAttachment?.publicUrl) {
+      // Append attachment link to body. If only attachment (no text), use the URL alone.
+      const url = pendingAttachment.publicUrl;
+      const isImage = pendingAttachment.type.startsWith('image/');
+      const link = isImage ? `[image] ${url}` : `[file: ${pendingAttachment.name}] ${url}`;
+      body = body ? `${body}\n${link}` : link;
+    }
+    if (!body) {
+      setSending(false);
+      return;
+    }
     setInput('');
+    const attachmentCopy = pendingAttachment;
+    setPendingAttachment(null);
     if (editingId) {
       await doEdit(editingId, body);
       return;
@@ -279,7 +303,9 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
           channel_id: activeChannelId,
           sender_id: user.id,
           body,
-          message_type: 'text',
+          message_type: attachmentCopy?.type.startsWith('image/') ? 'image' :
+                        attachmentCopy?.type.startsWith('video/') ? 'video' :
+                        attachmentCopy?.type.startsWith('audio/') ? 'audio' : 'file',
           reply_to: replyTo?.id || null,
         }).select().single();
         if (error) throw error;
@@ -289,7 +315,9 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
           conversation_id: activeConversationId,
           sender_id: user.id,
           plaintext_body: body,
-          message_type: 'text',
+          message_type: attachmentCopy?.type.startsWith('image/') ? 'image' :
+                        attachmentCopy?.type.startsWith('video/') ? 'video' :
+                        attachmentCopy?.type.startsWith('audio/') ? 'audio' : 'file',
           reply_to: replyTo?.id || null,
         }).select().single();
         if (error) throw error;
@@ -301,6 +329,47 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
       toast.error(`Failed to send: ${e.message}`);
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleFileSelect = async (file: File) => {
+    if (!user) return;
+    // Validate size
+    const max = 25 * 1024 * 1024;
+    if (file.size > max) {
+      toast.error('File too large (max 25 MB)');
+      return;
+    }
+    // Generate preview for images
+    let preview: string | undefined;
+    if (file.type.startsWith('image/')) {
+      preview = URL.createObjectURL(file);
+    }
+    setPendingAttachment({
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      preview,
+    });
+    setUploadingAttachment(true);
+    try {
+      const supabase = createClient();
+      const ext = file.name.split('.').pop() || 'bin';
+      const path = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      const { error: upErr } = await supabase.storage
+        .from('attachments')
+        .upload(path, file, { cacheControl: '3600', upsert: false });
+      if (upErr) throw upErr;
+      const { data: { publicUrl } } = supabase.storage
+        .from('attachments')
+        .getPublicUrl(path);
+      setPendingAttachment((prev) => prev ? { ...prev, path, publicUrl } : prev);
+      toast.success('Attachment ready — send your message');
+    } catch (e: any) {
+      toast.error(`Upload failed: ${e.message}`);
+      setPendingAttachment(null);
+    } finally {
+      setUploadingAttachment(false);
     }
   };
 
@@ -548,11 +617,59 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
 
       {/* Composer */}
       <div className="px-4 py-3 shrink-0">
+        {/* Attachment preview */}
+        {pendingAttachment && (
+          <div className="mb-2 flex items-center gap-2 p-2 rounded-md bg-[#1a1525] border border-white/5">
+            {pendingAttachment.preview ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={pendingAttachment.preview} alt="" className="h-12 w-12 rounded object-cover" />
+            ) : (
+              <div className="h-12 w-12 rounded bg-white/5 flex items-center justify-center">
+                <Paperclip className="h-5 w-5 text-muted-foreground" />
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-medium truncate">{pendingAttachment.name}</div>
+              <div className="text-[10px] text-muted-foreground">
+                {uploadingAttachment ? 'Uploading…' : `${(pendingAttachment.size / 1024).toFixed(1)} KB`}
+              </div>
+            </div>
+            {!uploadingAttachment && (
+              <button
+                onClick={() => setPendingAttachment(null)}
+                className="p-1 rounded hover:bg-white/5"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        )}
         <div className="flex items-end gap-2 bg-[#1a1525] rounded-lg px-3 py-1.5">
-          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0 rounded-full" aria-label="Attach file"
-            onClick={() => toast.info('File attachments — coming next iteration')}>
-            <Paperclip className="h-4 w-4 text-muted-foreground" />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0 rounded-full"
+            aria-label="Attach file"
+            disabled={uploadingAttachment}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {uploadingAttachment ? (
+              <Loader2 className="h-4 w-4 text-muted-foreground animate-spin" />
+            ) : (
+              <Paperclip className="h-4 w-4 text-muted-foreground" />
+            )}
           </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            accept="image/*,video/*,audio/*,application/pdf,text/plain"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleFileSelect(f);
+              e.target.value = '';
+            }}
+          />
           <textarea
             ref={inputRef}
             value={input}
@@ -592,7 +709,7 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
             size="icon"
             className="h-8 w-8 shrink-0 rounded-full bg-nexus-violet hover:bg-nexus-violet/80"
             onClick={sendMessage}
-            disabled={!input.trim() || sending}
+            disabled={(!input.trim() && !pendingAttachment) || sending || uploadingAttachment}
             aria-label="Send"
           >
             {editingId ? <Check className="h-4 w-4" /> : <Send className="h-4 w-4" />}
@@ -689,10 +806,7 @@ function MessageRow({
               className="bg-transparent outline-none border-b border-nexus-violet/50 text-sm w-full max-w-md"
             />
           ) : (
-            <p className="text-sm text-white/90 break-words whitespace-pre-wrap">
-              {message.body}
-              {isEdited && <span className="text-[10px] text-muted-foreground ml-1 italic">(edited)</span>}
-            </p>
+            <MessageBody body={message.body} isEdited={isEdited} />
           )}
 
           {/* Reactions */}
@@ -773,4 +887,82 @@ function MessageRow({
       </div>
     </div>
   );
+}
+
+/**
+ * Message body renderer — detects attachment markers like:
+ *   `[image] https://...`     → renders image inline
+ *   `[file: name] https://...` → renders download link
+ * Also turns plain URLs into clickable links.
+ */
+function MessageBody({ body, isEdited }: { body: string; isEdited: boolean }) {
+  // Split body into lines and render each
+  const lines = body.split('\n');
+  return (
+    <div className="text-sm text-white/90 break-words">
+      {lines.map((line, i) => {
+        // Check for [image] URL pattern
+        const imgMatch = line.match(/^\[image\]\s+(https?:\/\/\S+)$/i);
+        if (imgMatch) {
+          return (
+            <div key={i} className="mt-1 mb-1">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={imgMatch[1]}
+                alt="attachment"
+                className="max-w-xs max-h-64 rounded-md border border-white/10 object-cover cursor-pointer"
+                onClick={() => window.open(imgMatch[1], '_blank')}
+              />
+            </div>
+          );
+        }
+        // Check for [file: name] URL pattern
+        const fileMatch = line.match(/^\[file:\s*(.+?)\]\s+(https?:\/\/\S+)$/i);
+        if (fileMatch) {
+          return (
+            <a
+              key={i}
+              href={fileMatch[2]}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 px-3 py-1.5 mt-1 rounded-md bg-white/5 border border-white/10 hover:bg-white/10 text-xs text-nexus-lavender"
+            >
+              <Paperclip className="h-3 w-3" />
+              {fileMatch[1]}
+            </a>
+          );
+        }
+        // Plain line — render with URL detection
+        return (
+          <p key={i} className="whitespace-pre-wrap">
+            {renderUrls(line)}
+            {i === lines.length - 1 && isEdited && (
+              <span className="text-[10px] text-muted-foreground ml-1 italic">(edited)</span>
+            )}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+function renderUrls(text: string): React.ReactNode[] {
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const parts = text.split(urlRegex);
+  return parts.map((part, i) => {
+    if (urlRegex.test(part)) {
+      return (
+        <a
+          key={i}
+          href={part}
+          target="_blank"
+          rel="noreferrer"
+          className="text-nexus-lavender hover:underline break-all"
+        >
+          {part}
+        </a>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
 }
