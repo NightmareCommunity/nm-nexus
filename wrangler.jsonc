@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "nm-nexus",
+  "account_id": "9dba4b2bcc1c44e30c76b6d50e9ad8c6",
   "compatibility_date": "2026-08-18",
   "compatibility_flags": ["nodejs_compat"],
   "main": ".open-next/worker.js",

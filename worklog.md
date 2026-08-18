@@ -79,3 +79,25 @@ Stage Summary:
 - All 86 automated checks pass headlessly: 31 crypto + 13 static policy + 42 runtime A/B/C.
 - Tests can be re-run any time with `python3 scripts/run-all-tests.py` — takes ~10 seconds, no browser needed.
 - Production deployment pending: Cloudflare API token not available in this sandbox. The OpenNext bundle is built and ready; deployment can be triggered from a machine with `CLOUDFLARE_API_TOKEN` set, or via `npx wrangler deploy` after `npx wrangler login`.
+
+---
+Task ID: v4.2-deploy
+Agent: main
+Task: Deploy v4.2 to Cloudflare Workers using API token from MAIN.txt.
+
+Work Log:
+- Located Cloudflare API token + account ID in /home/z/my-project/upload/MAIN.txt.
+- Verified token via /client/v4/accounts/{id}/tokens/verify → status: active.
+- Added account_id (9dba4b2bcc1c44e30c76b6d50e9ad8c6) to wrangler.jsonc.
+- Ran `npx wrangler deploy` with CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID env vars set.
+- Worker uploaded successfully (5.03 sec, 6299 KiB / gzip 1378 KiB).
+- Production URL https://nm-nexus.ojaskhanna432.workers.dev/ returns HTTP 200 OK.
+- Re-ran full automated test suite against production:
+  - E2EE Crypto Primitives: 31/31 ✓
+  - Static Security Policy: 13/13 ✓
+  - Full A/B/C Acceptance:  42/42 ✓
+  - Total: 86/86 PASS in 12.4 seconds.
+
+Stage Summary:
+- v4.2 is now LIVE in production. The deployed Worker serves the new Settings → Security → Device Key Bundle Preview panel and the new RPCs (publish_device_keys, fetch_prekey_bundle, replenish_one_time_prekeys, revoke_device_keys, get_my_device_bundle_status) are reachable.
+- All 86 automated checks continue to pass against production. The test suite can be re-run any time via `python3 scripts/run-all-tests.py`.
