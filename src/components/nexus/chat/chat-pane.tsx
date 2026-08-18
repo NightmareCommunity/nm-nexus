@@ -7,10 +7,10 @@ import { createClient } from '@/lib/supabase/client';
 import type { Database } from '@/lib/database.types';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   ArrowLeft, Send, Paperclip, Phone, Video, MoreVertical,
-  Smile, Reply, Edit2, Trash2, Hash, Volume2, Users, X, Check, Loader2
+  Smile, Reply, Edit2, Trash2, Hash, Volume2, Users, X, Check, Loader2,
+  Download, FileText, ArrowDown, Image as ImageIcon,
 } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -20,6 +20,16 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { format, isToday, isYesterday } from 'date-fns';
+import {
+  uploadPrivateAttachment,
+  createAttachmentRecord,
+  fetchAttachmentsForMessages,
+  getSignedAttachmentUrl,
+  deleteOwnedAttachment,
+  markAsRead,
+  checkRateLimit,
+  type AttachmentRecord,
+} from '@/lib/nexus-helpers';
 
 type Message = Database['public']['Tables']['messages']['Row'];
 type ChannelMessage = Database['public']['Tables']['channel_messages']['Row'];
@@ -40,9 +50,13 @@ interface ChatMessage {
   status: 'sending' | 'sent' | 'failed';
   reactions: { reaction: string; count: number; users: string[] }[];
   channelMessage?: boolean;
+  attachments?: AttachmentRecord[];
 }
 
 const EMOJIS = ['👍', '❤️', '😂', '🔥', '🎉', '😮', '😢', '🙏', '💯', '✅', '👀', '💜'];
+
+// Cursor pagination — 50 messages per page (matches spec).
+const PAGE_SIZE = 50;
 
 export function ChatPane({ mobile = false }: { mobile?: boolean }) {
   const { user, profile } = useAuthStore();
@@ -61,32 +75,50 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [oldestCursor, setOldestCursor] = useState<{ createdAt: string; id: string } | null>(null);
+  const [atBottom, setAtBottom] = useState(true);
+  const [unreadMarkerId, setUnreadMarkerId] = useState<string | null>(null);
+
   const [pendingAttachment, setPendingAttachment] = useState<{
     name: string;
     size: number;
     type: string;
     preview?: string;
-    path?: string;
-    publicUrl?: string;
+    storagePath?: string;
+    mimeType?: string;
+    width?: number;
+    height?: number;
+    duration?: number;
   } | null>(null);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const prevHeightRef = useRef<number>(0);
 
   const isActive = activeConversationId || activeChannelId;
 
-  const loadAll = useCallback(async () => {
+  // ─────────────────────────────────────────────────────────────────
+  // Load initial messages (latest PAGE_SIZE) + participants + reactions
+  // ─────────────────────────────────────────────────────────────────
+  const loadInitial = useCallback(async () => {
     if (!user || !isActive) return;
     const supabase = createClient();
     setLoading(true);
+    setMessages([]);
+    setHasMore(false);
+    setOldestCursor(null);
 
     if (activeConversationId) {
-      // DM/group conversation
       const [{ data: conv }, { data: members }] = await Promise.all([
         supabase.from('conversations').select('*').eq('id', activeConversationId).maybeSingle(),
         supabase.from('conversation_members')
-          .select('user_id, profiles!inner(*)')
+          .select('user_id, profiles!inner(*), last_read_message_id')
           .eq('conversation_id', activeConversationId),
       ]);
       setConversation(conv);
@@ -95,32 +127,67 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
         .filter(Boolean);
       setParticipants(profiles);
 
+      // Find the user's last_read_message_id to render the unread marker
+      const myMembership = (members || []).find((m: any) => m.user_id === user.id);
+      const lastReadId = myMembership?.last_read_message_id || null;
+
+      // Load latest PAGE_SIZE messages — cursor is (created_at, id) descending
       const { data: msgs } = await supabase
         .from('messages')
         .select('*')
         .eq('conversation_id', activeConversationId)
         .is('deleted_at', null)
-        .order('created_at', { ascending: true })
-        .limit(100);
+        .order('created_at', { ascending: false })
+        .limit(PAGE_SIZE);
+
+      // msgs are newest-first; reverse for display (oldest-first)
+      const oldest = (msgs && msgs.length > 0) ? msgs[msgs.length - 1] : null;
+      const oldestCur = oldest
+        ? { createdAt: oldest.created_at, id: oldest.id }
+        : null;
+
+      const reversedMsgs = (msgs || []).slice().reverse();
 
       const { data: reactions } = await supabase
         .from('message_reactions')
         .select('*')
-        .in('message_id', (msgs || []).map((m) => m.id));
+        .in('message_id', reversedMsgs.map((m) => m.id));
 
-      const enriched = (msgs || []).map((m) => enrichMessage(m, reactions || [], false));
+      // Fetch attachments via RPC (membership-checked)
+      const attachmentsMap = await fetchAttachmentsForMessages(reversedMsgs.map((m) => m.id));
+
+      const enriched = reversedMsgs.map((m) => {
+        const em = enrichMessage(m, reactions || [], false);
+        em.attachments = attachmentsMap.get(m.id) || [];
+        return em;
+      });
       setMessages(enriched);
+      setOldestCursor(oldestCur);
+      setHasMore((msgs || []).length === PAGE_SIZE);
 
-      // Mark read
-      if (msgs && msgs.length > 0) {
-        const last = msgs[msgs.length - 1];
-        await supabase.from('conversation_members')
-          .update({ last_read_message_id: last.id })
-          .eq('conversation_id', activeConversationId)
-          .eq('user_id', user.id);
+      // Set unread marker: first message after last_read_message_id
+      if (lastReadId) {
+        const idx = enriched.findIndex((m) => m.id === lastReadId);
+        if (idx >= 0 && idx + 1 < enriched.length) {
+          setUnreadMarkerId(enriched[idx + 1].id);
+        } else {
+          setUnreadMarkerId(null);
+        }
+      } else {
+        // No read state — marker on first message
+        setUnreadMarkerId(enriched[0]?.id || null);
+      }
+
+      // Mark read up to the latest message I haven't read
+      if (enriched.length > 0) {
+        const last = enriched[enriched.length - 1];
+        await markAsRead(user.id, {
+          conversationId: activeConversationId,
+          messageId: last.id,
+          messageCreatedAt: last.createdAt,
+        });
       }
     } else if (activeChannelId) {
-      // Channel messages
       const { data: chan } = await supabase
         .from('channels')
         .select('name, type')
@@ -128,7 +195,6 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
         .maybeSingle();
       setChannelInfo(chan);
 
-      // Load community members for the member panel
       if (activeCommunityId) {
         const { data: cm } = await supabase
           .from('community_members')
@@ -137,20 +203,144 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
         setParticipants((cm || []).map((m: any) => m.profiles as Profile).filter(Boolean));
       }
 
+      // Read state for channel
+      const { data: rs } = await supabase
+        .from('read_states')
+        .select('last_read_message_id, last_read_at')
+        .eq('user_id', user.id)
+        .eq('channel_id', activeChannelId)
+        .maybeSingle();
+      const lastReadAt = rs?.last_read_at ? new Date(rs.last_read_at).getTime() : 0;
+
       const { data: msgs } = await supabase
         .from('channel_messages')
         .select('*')
         .eq('channel_id', activeChannelId)
         .is('deleted_at', null)
-        .order('created_at', { ascending: true })
-        .limit(100);
+        .order('created_at', { ascending: false })
+        .limit(PAGE_SIZE);
 
-      const enriched = (msgs || []).map((m) => enrichMessage(m, [], true));
+      const oldest = (msgs && msgs.length > 0) ? msgs[msgs.length - 1] : null;
+      const oldestCur = oldest
+        ? { createdAt: oldest.created_at, id: oldest.id }
+        : null;
+
+      const reversedMsgs = (msgs || []).slice().reverse();
+
+      const attachmentsMap = await fetchAttachmentsForMessages(reversedMsgs.map((m) => m.id));
+
+      const enriched = reversedMsgs.map((m) => {
+        const em = enrichMessage(m, [], true);
+        em.attachments = attachmentsMap.get(m.id) || [];
+        return em;
+      });
       setMessages(enriched);
+      setOldestCursor(oldestCur);
+      setHasMore((msgs || []).length === PAGE_SIZE);
+
+      // Unread marker: first message with created_at > last_read_at
+      if (lastReadAt > 0) {
+        const idx = enriched.findIndex((m) => new Date(m.createdAt).getTime() > lastReadAt);
+        setUnreadMarkerId(idx >= 0 ? enriched[idx].id : null);
+      } else if (enriched.length > 0) {
+        setUnreadMarkerId(enriched[0].id);
+      } else {
+        setUnreadMarkerId(null);
+      }
+
+      // Mark channel read
+      if (enriched.length > 0) {
+        const last = enriched[enriched.length - 1];
+        await markAsRead(user.id, {
+          channelId: activeChannelId,
+          messageId: last.id,
+          messageCreatedAt: last.createdAt,
+        });
+      }
     }
 
     setLoading(false);
+    setAtBottom(true);
+    // Scroll to bottom on initial load
+    requestAnimationFrame(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+    });
   }, [user, activeConversationId, activeChannelId, activeCommunityId, isActive]);
+
+  // ─────────────────────────────────────────────────────────────────
+  // Load older messages (cursor pagination, preserves scroll position)
+  // ─────────────────────────────────────────────────────────────────
+  const loadOlder = useCallback(async () => {
+    if (!user || !isActive || !oldestCursor || loadingMore || !hasMore) return;
+    const supabase = createClient();
+    setLoadingMore(true);
+
+    // Capture current scroll height so we can restore after prepending.
+    const scroller = scrollRef.current;
+    if (scroller) prevHeightRef.current = scroller.scrollHeight;
+
+    const table = activeChannelId ? 'channel_messages' : 'messages';
+    const filterCol = activeChannelId ? 'channel_id' : 'conversation_id';
+    const filterVal = activeChannelId || activeConversationId;
+
+    // Cursor query: created_at < oldestCursor.createdAt OR (equal AND id < oldestCursor.id)
+    // We use or() to express this safely.
+    const { data: older } = await supabase
+      .from(table)
+      .select('*')
+      .eq(filterCol, filterVal as string)
+      .is('deleted_at', null)
+      .or(
+        `created_at.lt.${oldestCursor.createdAt},` +
+        `and(created_at.eq.${oldestCursor.createdAt},id.lt.${oldestCursor.id})`
+      )
+      .order('created_at', { ascending: false })
+      .limit(PAGE_SIZE);
+
+    if (!older || older.length === 0) {
+      setHasMore(false);
+      setLoadingMore(false);
+      return;
+    }
+
+    const newOldest = older[older.length - 1];
+    setOldestCursor({ createdAt: newOldest.created_at, id: newOldest.id });
+    setHasMore(older.length === PAGE_SIZE);
+
+    const reversedOlder = older.slice().reverse();
+
+    // Fetch attachments for the new older messages
+    const attachmentsMap = await fetchAttachmentsForMessages(reversedOlder.map((m) => m.id));
+
+    // Fetch reactions for DM path only (channel_messages don't have reactions table in current schema)
+    let reactions: Reaction[] = [];
+    if (!activeChannelId) {
+      const { data: r } = await supabase
+        .from('message_reactions')
+        .select('*')
+        .in('message_id', reversedOlder.map((m) => m.id));
+      reactions = r || [];
+    }
+
+    const enrichedOlder = reversedOlder.map((m) => {
+      const em = enrichMessage(m, reactions, !!activeChannelId);
+      em.attachments = attachmentsMap.get(m.id) || [];
+      return em;
+    });
+
+    setMessages((prev) => [...enrichedOlder, ...prev]);
+
+    // Restore scroll position after prepending older messages.
+    requestAnimationFrame(() => {
+      if (scroller) {
+        const newHeight = scroller.scrollHeight;
+        scroller.scrollTop = newHeight - prevHeightRef.current;
+      }
+    });
+    setLoadingMore(false);
+  }, [user, isActive, oldestCursor, loadingMore, hasMore, activeChannelId, activeConversationId]);
 
   function enrichMessage(m: any, reactions: Reaction[], isChannel: boolean): ChatMessage {
     const msgReactions = reactions.filter((r) => r.message_id === m.id);
@@ -178,8 +368,9 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
     };
   }
 
+  // Realtime subscriptions
   useEffect(() => {
-    loadAll();
+    loadInitial();
     if (!user || !isActive) return;
     const supabase = createClient();
 
@@ -191,13 +382,38 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
       .channel(`chat:${filterVal}`)
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: tableName, filter: `${filterCol}=eq.${filterVal}` },
-        (payload) => {
+        async (payload) => {
           const m = payload.new as any;
+          if (m.deleted_at) return;
+          // Fetch attachments for the new message
+          const attachmentsMap = await fetchAttachmentsForMessages([m.id]);
           setMessages((prev) => {
             if (prev.some((x) => x.id === m.id)) return prev;
             const enriched = enrichMessage(m, [], !!activeChannelId);
+            enriched.attachments = attachmentsMap.get(m.id) || [];
+            // If user is at the bottom, append + auto-scroll. Otherwise just append (don't mark read).
             return [...prev, enriched];
           });
+          // Mark read only if user is currently viewing the bottom
+          if (scrollRef.current && atBottom && user) {
+            const scroller = scrollRef.current;
+            const isAtBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+            if (isAtBottom) {
+              if (activeChannelId) {
+                await markAsRead(user.id, {
+                  channelId: activeChannelId,
+                  messageId: m.id,
+                  messageCreatedAt: m.created_at,
+                });
+              } else if (activeConversationId) {
+                await markAsRead(user.id, {
+                  conversationId: activeConversationId,
+                  messageId: m.id,
+                  messageCreatedAt: m.created_at,
+                });
+              }
+            }
+          }
         })
       .on('postgres_changes',
         { event: 'UPDATE', schema: 'public', table: tableName, filter: `${filterCol}=eq.${filterVal}` },
@@ -234,14 +450,45 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [loadAll, user, activeConversationId, activeChannelId, isActive]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadInitial, user, activeConversationId, activeChannelId, isActive, atBottom]);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages, but only if user was already at bottom
   useEffect(() => {
+    if (!atBottom) return;
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, typingUsers]);
+  }, [messages, typingUsers, atBottom]);
+
+  // Track scroll position to show "Jump to Present" button
+  const handleScroll = useCallback(() => {
+    const sc = scrollRef.current;
+    if (!sc) return;
+    const distFromBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+    const isAtBottom = distFromBottom < 80;
+    setAtBottom(isAtBottom);
+    // If user scrolled to top, load older messages
+    if (sc.scrollTop < 50 && hasMore && !loadingMore) {
+      loadOlder();
+    }
+  }, [hasMore, loadingMore, loadOlder]);
+
+  const jumpToPresent = () => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+    setAtBottom(true);
+    // Re-mark read
+    if (user && messages.length > 0) {
+      const last = messages[messages.length - 1];
+      if (activeChannelId) {
+        markAsRead(user.id, { channelId: activeChannelId, messageId: last.id, messageCreatedAt: last.createdAt });
+      } else if (activeConversationId) {
+        markAsRead(user.id, { conversationId: activeConversationId, messageId: last.id, messageCreatedAt: last.createdAt });
+      }
+    }
+  };
 
   // Typing indicator
   const lastTypingPing = useRef(0);
@@ -261,22 +508,22 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
   const sendMessage = async () => {
     if (!user || !isActive) return;
     if (!input.trim() && !pendingAttachment) return;
-    setSending(true);
-    let body = input.trim();
-    if (pendingAttachment?.publicUrl) {
-      // Append attachment link to body. If only attachment (no text), use the URL alone.
-      const url = pendingAttachment.publicUrl;
-      const isImage = pendingAttachment.type.startsWith('image/');
-      const link = isImage ? `[image] ${url}` : `[file: ${pendingAttachment.name}] ${url}`;
-      body = body ? `${body}\n${link}` : link;
-    }
-    if (!body) {
-      setSending(false);
+
+    // Rate limit: 30 messages per 30 seconds
+    const allowed = await checkRateLimit('send_message', 30, 30);
+    if (!allowed) {
+      toast.error('You are sending messages too quickly. Please slow down.');
       return;
     }
+
+    setSending(true);
+    const body = input.trim();
     setInput('');
+
     const attachmentCopy = pendingAttachment;
     setPendingAttachment(null);
+    setUploadProgress(0);
+
     if (editingId) {
       await doEdit(editingId, body);
       return;
@@ -295,34 +542,86 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
       channelMessage: !!activeChannelId,
     };
     setMessages((prev) => [...prev, optimistic]);
+    // Auto-scroll on optimistic send
+    requestAnimationFrame(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+    });
 
     try {
       const supabase = createClient();
+      let insertedId: string | null = null;
+      let insertedCreatedAt: string | null = null;
+
+      const messageType = attachmentCopy?.type.startsWith('image/') ? 'image' :
+                          attachmentCopy?.type.startsWith('video/') ? 'video' :
+                          attachmentCopy?.type.startsWith('audio/') ? 'audio' : 'file';
+
       if (activeChannelId) {
         const { data, error } = await supabase.from('channel_messages').insert({
           channel_id: activeChannelId,
           sender_id: user.id,
           body,
-          message_type: attachmentCopy?.type.startsWith('image/') ? 'image' :
-                        attachmentCopy?.type.startsWith('video/') ? 'video' :
-                        attachmentCopy?.type.startsWith('audio/') ? 'audio' : 'file',
+          message_type: attachmentCopy ? messageType : 'text',
           reply_to: replyTo?.id || null,
         }).select().single();
         if (error) throw error;
-        setMessages((prev) => prev.map((m) => m.id === tempId ? { ...m, id: data.id, status: 'sent', createdAt: data.created_at } : m));
+        insertedId = data.id;
+        insertedCreatedAt = data.created_at;
       } else if (activeConversationId) {
         const { data, error } = await supabase.from('messages').insert({
           conversation_id: activeConversationId,
           sender_id: user.id,
           plaintext_body: body,
-          message_type: attachmentCopy?.type.startsWith('image/') ? 'image' :
-                        attachmentCopy?.type.startsWith('video/') ? 'video' :
-                        attachmentCopy?.type.startsWith('audio/') ? 'audio' : 'file',
+          message_type: attachmentCopy ? messageType : 'text',
           reply_to: replyTo?.id || null,
         }).select().single();
         if (error) throw error;
-        setMessages((prev) => prev.map((m) => m.id === tempId ? { ...m, id: data.id, status: 'sent', createdAt: data.created_at } : m));
+        insertedId = data.id;
+        insertedCreatedAt = data.created_at;
       }
+
+      // If an attachment was uploaded, create the attachments record now that we have a message_id.
+      if (attachmentCopy && attachmentCopy.storagePath && insertedId) {
+        const created = await createAttachmentRecord({
+          messageId: insertedId,
+          ownerId: user.id,
+          storagePath: attachmentCopy.storagePath,
+          fileName: attachmentCopy.name,
+          mimeType: attachmentCopy.mimeType || attachmentCopy.type,
+          fileSize: attachmentCopy.size,
+          width: attachmentCopy.width,
+          height: attachmentCopy.height,
+          duration: attachmentCopy.duration,
+        });
+        if (created) {
+          // Attach to the optimistic message
+          setMessages((prev) => prev.map((m) => m.id === tempId ? {
+            ...m,
+            id: insertedId!,
+            status: 'sent',
+            createdAt: insertedCreatedAt!,
+            attachments: [created],
+          } : m));
+        } else {
+          // Record creation failed — orphan cleanup will eventually remove the storage object.
+          toast.error('Attachment upload succeeded but the database record failed. The orphaned file will be cleaned up later.');
+          setMessages((prev) => prev.map((m) => m.id === tempId ? { ...m, id: insertedId!, status: 'sent', createdAt: insertedCreatedAt! } : m));
+        }
+      } else {
+        setMessages((prev) => prev.map((m) => m.id === tempId ? { ...m, id: insertedId!, status: 'sent', createdAt: insertedCreatedAt! } : m));
+      }
+
+      // Mark read on send
+      if (insertedId && insertedCreatedAt) {
+        if (activeChannelId) {
+          await markAsRead(user.id, { channelId: activeChannelId, messageId: insertedId, messageCreatedAt: insertedCreatedAt });
+        } else if (activeConversationId) {
+          await markAsRead(user.id, { conversationId: activeConversationId, messageId: insertedId, messageCreatedAt: insertedCreatedAt });
+        }
+      }
+
       setReplyTo(null);
     } catch (e: any) {
       setMessages((prev) => prev.map((m) => m.id === tempId ? { ...m, status: 'failed' } : m));
@@ -334,7 +633,7 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
 
   const handleFileSelect = async (file: File) => {
     if (!user) return;
-    // Validate size
+    // Validate size + type
     const max = 25 * 1024 * 1024;
     if (file.size > max) {
       toast.error('File too large (max 25 MB)');
@@ -352,18 +651,23 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
       preview,
     });
     setUploadingAttachment(true);
+    setUploadProgress(0);
     try {
-      const supabase = createClient();
-      const ext = file.name.split('.').pop() || 'bin';
-      const path = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-      const { error: upErr } = await supabase.storage
-        .from('attachments')
-        .upload(path, file, { cacheControl: '3600', upsert: false });
-      if (upErr) throw upErr;
-      const { data: { publicUrl } } = supabase.storage
-        .from('attachments')
-        .getPublicUrl(path);
-      setPendingAttachment((prev) => prev ? { ...prev, path, publicUrl } : prev);
+      const result = await uploadPrivateAttachment(file, user.id, (sent, total) => {
+        setUploadProgress(total > 0 ? Math.round((sent / total) * 100) : 0);
+      });
+      if (!result) {
+        setPendingAttachment(null);
+        return;
+      }
+      setPendingAttachment((prev) => prev ? {
+        ...prev,
+        storagePath: result.path,
+        mimeType: result.mimeType,
+        width: result.width,
+        height: result.height,
+        duration: result.duration,
+      } : prev);
       toast.success('Attachment ready — send your message');
     } catch (e: any) {
       toast.error(`Upload failed: ${e.message}`);
@@ -469,7 +773,7 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
     : otherUser?.status === 'online' ? 'Online' : 'Offline';
 
   return (
-    <div className="flex-1 flex flex-col bg-[#0a0810] min-w-0">
+    <div className="flex-1 flex flex-col bg-[#0a0810] min-w-0 relative">
       {/* Header */}
       <header className="h-12 px-4 flex items-center gap-2 border-b border-white/5 shadow-sm shrink-0">
         {mobile && (
@@ -520,7 +824,11 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
       </header>
 
       {/* Messages — continuous conversation layout */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto scrollbar-thin relative"
+      >
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <p className="text-sm text-muted-foreground">Loading messages…</p>
@@ -537,7 +845,21 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
           </div>
         ) : (
           <div className="py-4">
-            {/* Channel welcome — only for channels, only at the top */}
+            {/* Load-older indicator at the top */}
+            {hasMore && (
+              <div className="flex items-center justify-center py-3">
+                {loadingMore ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                ) : (
+                  <button
+                    onClick={loadOlder}
+                    className="text-xs text-nexus-lavender hover:underline"
+                  >
+                    Load older messages
+                  </button>
+                )}
+              </div>
+            )}
             {activeChannelId && (
               <div className="px-4 pb-4 mb-2">
                 <div className="h-12 w-12 rounded-full bg-nexus-violet/20 flex items-center justify-center mb-2">
@@ -551,7 +873,6 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
               const prev = messages[idx - 1];
               const isMine = m.senderId === user?.id;
               const sender = participants.find((p) => p.id === m.senderId);
-              // Group with previous if same sender and within 5 minutes
               const grouped =
                 prev && prev.senderId === m.senderId &&
                 new Date(m.createdAt).getTime() - new Date(prev.createdAt).getTime() < 5 * 60 * 1000 &&
@@ -560,6 +881,7 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
               const showDateSeparator =
                 !prev ||
                 new Date(prev.createdAt).toDateString() !== new Date(m.createdAt).toDateString();
+              const showUnreadSeparator = m.id === unreadMarkerId;
               return (
                 <div key={m.id}>
                   {showDateSeparator && (
@@ -569,6 +891,15 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
                         {formatDateSeparator(m.createdAt)}
                       </span>
                       <div className="flex-1 h-px bg-white/5" />
+                    </div>
+                  )}
+                  {showUnreadSeparator && (
+                    <div className="flex items-center px-4 my-2">
+                      <div className="flex-1 h-px bg-nexus-violet/60" />
+                      <span className="px-2 text-[10px] uppercase tracking-wider font-bold text-nexus-lavender">
+                        New
+                      </span>
+                      <div className="flex-1 h-px bg-nexus-violet/60" />
                     </div>
                   )}
                   <MessageRow
@@ -598,9 +929,24 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
                 {participants.find((p) => p.id === typingUsers[0])?.display_name || 'Someone'} is typing…
               </div>
             )}
+            <div ref={bottomRef} />
           </div>
         )}
       </div>
+
+      {/* Jump to Present button — visible when scrolled up */}
+      {!atBottom && !loading && messages.length > 0 && (
+        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-10">
+          <Button
+            onClick={jumpToPresent}
+            size="sm"
+            className="rounded-full bg-nexus-violet hover:bg-nexus-violet/80 shadow-lg gap-1"
+          >
+            <ArrowDown className="h-3 w-3" />
+            Jump to Present
+          </Button>
+        </div>
+      )}
 
       {/* Reply preview */}
       {replyTo && (
@@ -626,18 +972,28 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
               <img src={pendingAttachment.preview} alt="" className="h-12 w-12 rounded object-cover" />
             ) : (
               <div className="h-12 w-12 rounded bg-white/5 flex items-center justify-center">
-                <Paperclip className="h-5 w-5 text-muted-foreground" />
+                <FileText className="h-5 w-5 text-muted-foreground" />
               </div>
             )}
             <div className="flex-1 min-w-0">
               <div className="text-xs font-medium truncate">{pendingAttachment.name}</div>
               <div className="text-[10px] text-muted-foreground">
-                {uploadingAttachment ? 'Uploading…' : `${(pendingAttachment.size / 1024).toFixed(1)} KB`}
+                {uploadingAttachment
+                  ? `Uploading… ${uploadProgress}%`
+                  : `${(pendingAttachment.size / 1024).toFixed(1)} KB · ready`}
               </div>
+              {uploadingAttachment && (
+                <div className="mt-1 h-1 bg-white/5 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-nexus-violet transition-all"
+                    style={{ width: `${uploadProgress}%` }}
+                  />
+                </div>
+              )}
             </div>
             {!uploadingAttachment && (
               <button
-                onClick={() => setPendingAttachment(null)}
+                onClick={() => { setPendingAttachment(null); setUploadProgress(0); }}
                 className="p-1 rounded hover:bg-white/5"
               >
                 <X className="h-3 w-3" />
@@ -664,7 +1020,7 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
             ref={fileInputRef}
             type="file"
             className="hidden"
-            accept="image/*,video/*,audio/*,application/pdf,text/plain"
+            accept="image/*,video/*,audio/*,application/pdf,text/plain,application/zip,application/msword,application/vnd.openxmlformats-officedocument.*"
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) handleFileSelect(f);
@@ -808,7 +1164,16 @@ function MessageRow({
               className="bg-transparent outline-none border-b border-nexus-violet/50 text-sm w-full max-w-md"
             />
           ) : (
-            <MessageBody body={message.body} isEdited={isEdited} />
+            <>
+              <MessageBody body={message.body} isEdited={isEdited} />
+              {message.attachments && message.attachments.length > 0 && (
+                <div className="mt-1 space-y-2">
+                  {message.attachments.map((att) => (
+                    <AttachmentView key={att.id} attachment={att} isMine={isMine} />
+                  ))}
+                </div>
+              )}
+            </>
           )}
 
           {/* Reactions */}
@@ -892,58 +1257,143 @@ function MessageRow({
 }
 
 /**
- * Message body renderer — detects attachment markers like:
- *   `[image] https://...`     → renders image inline
- *   `[file: name] https://...` → renders download link
- * Also turns plain URLs into clickable links.
+ * Attachment renderer — fetches a signed URL on demand and renders
+ * inline preview (image/video/audio) or download link (other types).
+ */
+function AttachmentView({ attachment, isMine }: { attachment: AttachmentRecord; isMine: boolean }) {
+  const [signedUrl, setSignedUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setFailed(false);
+    getSignedAttachmentUrl(attachment.storage_path, 300)
+      .then((url) => {
+        if (cancelled) return;
+        if (url) setSignedUrl(url);
+        else setFailed(true);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFailed(true);
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [attachment.storage_path]);
+
+  const mime = attachment.mime_type || '';
+  const fileName = attachment.original_filename || attachment.file_name || 'file';
+  const sizeLabel = attachment.file_size
+    ? attachment.file_size > 1024 * 1024
+      ? `${(attachment.file_size / 1024 / 1024).toFixed(1)} MB`
+      : `${(attachment.file_size / 1024).toFixed(1)} KB`
+    : '';
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 p-2 rounded-md bg-white/5 max-w-xs">
+        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        <span className="text-xs text-muted-foreground">Loading attachment…</span>
+      </div>
+    );
+  }
+
+  if (failed || !signedUrl) {
+    return (
+      <div className="flex items-center gap-2 p-2 rounded-md bg-red-500/10 border border-red-500/30 max-w-xs">
+        <FileText className="h-4 w-4 text-red-400" />
+        <div className="text-xs text-red-400">
+          Failed to load attachment
+          {isMine && (
+            <button
+              onClick={async () => {
+                if (confirm('Delete this attachment?')) {
+                  await deleteOwnedAttachment(attachment.id, attachment.storage_path);
+                }
+              }}
+              className="ml-2 underline hover:text-red-300"
+            >
+              Remove
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Image
+  if (mime.startsWith('image/')) {
+    return (
+      <div className="max-w-xs max-h-80 rounded-md overflow-hidden border border-white/10">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={signedUrl}
+          alt={fileName}
+          className="max-w-full max-h-80 object-cover cursor-pointer hover:opacity-90"
+          onClick={() => window.open(signedUrl, '_blank')}
+        />
+      </div>
+    );
+  }
+
+  // Video
+  if (mime.startsWith('video/')) {
+    return (
+      <div className="max-w-sm rounded-md overflow-hidden border border-white/10">
+        <video
+          src={signedUrl}
+          controls
+          className="max-w-full max-h-80"
+        />
+      </div>
+    );
+  }
+
+  // Audio
+  if (mime.startsWith('audio/')) {
+    return (
+      <div className="flex items-center gap-2 p-2 rounded-md bg-white/5 max-w-sm">
+        <audio src={signedUrl} controls className="flex-1 h-8" />
+      </div>
+    );
+  }
+
+  // Generic file
+  return (
+    <a
+      href={signedUrl}
+      target="_blank"
+      rel="noreferrer"
+      download={fileName}
+      className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-white/5 border border-white/10 hover:bg-white/10 text-xs text-nexus-lavender max-w-sm"
+    >
+      <FileText className="h-4 w-4 shrink-0" />
+      <div className="min-w-0">
+        <div className="truncate font-medium">{fileName}</div>
+        {sizeLabel && <div className="text-[10px] text-muted-foreground">{sizeLabel}</div>}
+      </div>
+      <Download className="h-3 w-3 shrink-0 ml-2" />
+    </a>
+  );
+}
+
+/**
+ * Message body renderer — turns plain URLs into clickable links.
+ * (Removed: attachment markers — attachments are now first-class records.)
  */
 function MessageBody({ body, isEdited }: { body: string; isEdited: boolean }) {
-  // Split body into lines and render each
-  const lines = body.split('\n');
+  if (!body) return null;
   return (
     <div className="text-sm text-white/90 break-words">
-      {lines.map((line, i) => {
-        // Check for [image] URL pattern
-        const imgMatch = line.match(/^\[image\]\s+(https?:\/\/\S+)$/i);
-        if (imgMatch) {
-          return (
-            <div key={i} className="mt-1 mb-1">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={imgMatch[1]}
-                alt="attachment"
-                className="max-w-xs max-h-64 rounded-md border border-white/10 object-cover cursor-pointer"
-                onClick={() => window.open(imgMatch[1], '_blank')}
-              />
-            </div>
-          );
-        }
-        // Check for [file: name] URL pattern
-        const fileMatch = line.match(/^\[file:\s*(.+?)\]\s+(https?:\/\/\S+)$/i);
-        if (fileMatch) {
-          return (
-            <a
-              key={i}
-              href={fileMatch[2]}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-2 px-3 py-1.5 mt-1 rounded-md bg-white/5 border border-white/10 hover:bg-white/10 text-xs text-nexus-lavender"
-            >
-              <Paperclip className="h-3 w-3" />
-              {fileMatch[1]}
-            </a>
-          );
-        }
-        // Plain line — render with URL detection
-        return (
-          <p key={i} className="whitespace-pre-wrap">
-            {renderUrls(line)}
-            {i === lines.length - 1 && isEdited && (
-              <span className="text-[10px] text-muted-foreground ml-1 italic">(edited)</span>
-            )}
-          </p>
-        );
-      })}
+      <p className="whitespace-pre-wrap">
+        {renderUrls(body)}
+        {isEdited && (
+          <span className="text-[10px] text-muted-foreground ml-1 italic">(edited)</span>
+        )}
+      </p>
     </div>
   );
 }

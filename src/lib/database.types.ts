@@ -211,6 +211,7 @@ export interface Database {
           storage_path: string;
           encrypted_metadata: string | null;
           file_name: string | null;
+          original_filename: string | null;
           mime_type: string | null;
           file_size: number | null;
           width: number | null;
@@ -225,6 +226,7 @@ export interface Database {
           storage_path: string;
           encrypted_metadata?: string | null;
           file_name?: string | null;
+          original_filename?: string | null;
           mime_type?: string | null;
           file_size?: number | null;
           width?: number | null;
@@ -704,6 +706,67 @@ export interface Database {
           device_id: string;
         };
       };
+      can_access_attachment: { Args: { p_path: string }; Returns: boolean };
+      create_community_invite: {
+        Args: {
+          p_community_id: string;
+          p_max_uses?: number | null;
+          p_expires_at?: string | null;
+        };
+        Returns: string;
+      };
+      revoke_community_invite: { Args: { p_invite_id: string }; Returns: boolean };
+      fetch_message_attachments: {
+        Args: { p_message_ids: string[] };
+        Returns: {
+          id: string;
+          message_id: string;
+          owner_id: string;
+          storage_path: string;
+          file_name: string | null;
+          mime_type: string | null;
+          file_size: number | null;
+          width: number | null;
+          height: number | null;
+          duration_seconds: number | null;
+          thumbnail_path: string | null;
+          created_at: string;
+        }[];
+      };
+      delete_owned_attachment: { Args: { p_attachment_id: string }; Returns: boolean };
+      check_rate_limit: {
+        Args: { p_action: string; p_max: number; p_window_seconds: number };
+        Returns: boolean;
+      };
+      fetch_unread_counts: {
+        Args: Record<string, never>;
+        Returns: {
+          conversation_id: string | null;
+          channel_id: string | null;
+          unread_count: number;
+          has_mention: boolean;
+        }[];
+      };
+      mark_message_read: {
+        Args: {
+          p_conversation_id?: string | null;
+          p_channel_id?: string | null;
+          p_message_id?: string | null;
+          p_message_created_at?: string | null;
+        };
+        Returns: boolean;
+      };
+      create_channel_category: {
+        Args: { p_community_id: string; p_name: string };
+        Returns: string;
+      };
+      reorder_channel: {
+        Args: { p_channel_id: string; p_new_position: number; p_new_category_id?: string | null };
+        Returns: boolean;
+      };
+      delete_channel: { Args: { p_channel_id: string }; Returns: boolean };
+      cleanup_stale_voice_states: { Args: Record<string, never>; Returns: number };
+      cleanup_stale_calls: { Args: Record<string, never>; Returns: number };
     };
 
     Enums: {

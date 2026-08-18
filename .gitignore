@@ -95,3 +95,12 @@ db/*.db
 db/*.db-journal
 .dev.vars
 tsconfig.tsbuildinfo
+
+# Binary artifacts (regenerated on demand, not part of source)
+download/*.apk
+download/*.png
+download/*.jpg
+download/*.jpeg
+
+# v4.1 SQL runner worker (deployed separately, kept locally)
+sql-runner/

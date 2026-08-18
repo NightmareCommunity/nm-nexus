@@ -41,12 +41,38 @@ export function CallOverlay() {
   const callerRoleRef = useRef<'caller' | 'callee'>('caller');
   const cleanupRef = useRef<(() => void) | null>(null);
 
-  // STUN/TURN config
+  // STUN/TURN config — pulled from environment variables (NEXT_PUBLIC_*).
+  // STUN is stateless and free; TURN relays media and costs bandwidth.
+  // For now only STUN is configured. TURN support is wired but requires
+  // TURN_URL, TURN_USERNAME, TURN_CREDENTIAL env vars to be set in
+  // wrangler.jsonc (Cloudflare Workers) or .env.local (dev).
   const rtcConfig: RTCConfiguration = {
-    iceServers: [
-      { urls: process.env.NEXT_PUBLIC_STUN_URLS || 'stun:stun.l.google.com:19302' },
-    ],
+    iceServers: (() => {
+      const servers: RTCIceServer[] = [];
+      const stunUrls = process.env.NEXT_PUBLIC_STUN_URLS;
+      if (stunUrls) {
+        for (const u of stunUrls.split(',').map((s) => s.trim()).filter(Boolean)) {
+          servers.push({ urls: u });
+        }
+      } else {
+        servers.push({ urls: 'stun:stun.l.google.com:19302' });
+      }
+      const turnUrls = process.env.NEXT_PUBLIC_TURN_URLS;
+      const turnUser = process.env.NEXT_PUBLIC_TURN_USERNAME;
+      const turnCred = process.env.NEXT_PUBLIC_TURN_CREDENTIAL;
+      if (turnUrls && turnUser && turnCred) {
+        for (const u of turnUrls.split(',').map((s) => s.trim()).filter(Boolean)) {
+          servers.push({ urls: u, username: turnUser, credential: turnCred });
+        }
+      }
+      return servers;
+    })(),
+    // Enable ICE candidate gathering for both UDP and TCP/TLS when TURN is configured.
+    iceTransportPolicy: 'all',
   };
+
+  // Call setup timeout — if ringing for > 45s without answer, auto-end.
+  const callStartRef = useRef<number>(Date.now());
 
   // Duration timer
   useEffect(() => {
@@ -61,6 +87,16 @@ export function CallOverlay() {
 
     let cancelled = false;
     const supabase = supabaseRef.current;
+    callStartRef.current = Date.now();
+
+    // Auto-cleanup timeout — if ringing > 45s without answer, end call.
+    const ringingTimeout = setTimeout(() => {
+      if (status === 'ringing' || status === 'requesting') {
+        toast.info('Call timed out — no answer');
+        cleanupCall();
+        endCall();
+      }
+    }, 45000);
 
     const setupCall = async () => {
       try {
@@ -218,6 +254,7 @@ export function CallOverlay() {
 
     return () => {
       cancelled = true;
+      clearTimeout(ringingTimeout);
       cleanupCall();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -440,7 +477,7 @@ export function CallOverlay() {
       </div>
 
       <p className="text-xs text-white/50">
-        NM NEXUS · {callType === 'video' ? 'Video call' : 'Voice call'} · End-to-end encrypted via DTLS-SRTP
+        NM NEXUS · {callType === 'video' ? 'Video call' : 'Voice call'} · Media encrypted in transit via DTLS-SRTP · Signaling secured by TLS + RLS
       </p>
     </div>
   );

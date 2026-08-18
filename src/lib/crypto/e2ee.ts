@@ -1,7 +1,34 @@
 /**
  * NM NEXUS — End-to-End Encryption (E2EE) Module
  *
- * Architecture: Signal-protocol-inspired, built on libsodium primitives.
+ * ============================================================================
+ * ⚠️  STATUS: ARCHITECTURE STUB — NOT WIRED INTO MESSAGE FLOW  ⚠️
+ * ============================================================================
+ *
+ * This module is a FUTURE-PROTOCOL stub. It is NOT currently used by the
+ * chat / file / call code paths. Messages are stored as `plaintext_body`
+ * and protected only by TLS + Supabase Row-Level Security. Do not assume
+ * that messages sent today are end-to-end encrypted.
+ *
+ * The functions here are kept so that when E2EE is shipped (using an
+ * audited protocol such as the Signal Double Ratchet), the integration
+ * surface already exists. Until then, calling these functions from UI
+ * code is forbidden — the security panel in Settings must reflect this
+ * honestly.
+ *
+ * When wiring E2EE for real, you must:
+ *   1. Generate the device key bundle on first login (generateDeviceKeyBundle).
+ *   2. Publish only public keys to user_settings / devices tables.
+ *   3. Use fetch_prekey_bundle RPC to fetch a recipient's public bundle.
+ *   4. Use establishSession + encryptMessage on every outbound message.
+ *   5. Store the ciphertext in messages.encrypted_payload + encryption_nonce.
+ *   6. Use decryptMessage on every inbound message.
+ *   7. Implement key rotation + device revocation.
+ *   8. Run an external security audit before enabling in production.
+ *
+ * ============================================================================
+ *
+ * Architecture (planned, Signal-protocol-inspired, built on libsodium primitives).
  *
  * Primitives used (all from libsodium — audited, established):
  *   - X25519              : ECDH key exchange (identity keys, prekeys)

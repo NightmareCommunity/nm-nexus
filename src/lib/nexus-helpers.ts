@@ -219,28 +219,440 @@ export async function searchUsers(query: string, limit = 10) {
 
 /**
  * Mark a conversation/channel as read up to a given message.
+ * Uses the SECURITY DEFINER `mark_message_read` RPC for atomicity + membership check.
  */
 export async function markAsRead(
   userId: string,
-  opts: { conversationId?: string; channelId?: string; messageId?: string }
+  opts: { conversationId?: string; channelId?: string; messageId?: string; messageCreatedAt?: string }
 ): Promise<void> {
   const supabase = createClient();
-  const { conversationId, channelId, messageId } = opts;
+  const { conversationId, channelId, messageId, messageCreatedAt } = opts;
   if (!conversationId && !channelId) return;
 
-  const key = channelId
-    ? { user_id: userId, channel_id: channelId, conversation_id: null }
-    : { user_id: userId, channel_id: null, conversation_id: conversationId };
-
-  const { error } = await supabase.from('read_states').upsert(
-    {
-      ...key,
-      last_read_message_id: messageId ?? null,
-      last_read_at: new Date().toISOString(),
-    },
-    { onConflict: 'user_id,channel_id,conversation_id' }
-  );
+  const { error } = await supabase.rpc('mark_message_read', {
+    p_conversation_id: conversationId ?? null,
+    p_channel_id: channelId ?? null,
+    p_message_id: messageId ?? null,
+    p_message_created_at: messageCreatedAt ?? null,
+  });
   if (error) {
-    console.warn('markAsRead failed', error);
+    // Fallback to direct upsert for resilience (the RPC may be missing in older deploys).
+    console.warn('mark_message_read RPC failed, falling back to direct upsert', error);
+    const key = channelId
+      ? { user_id: userId, channel_id: channelId, conversation_id: null }
+      : { user_id: userId, channel_id: null, conversation_id: conversationId };
+    await supabase.from('read_states').upsert(
+      {
+        ...key,
+        last_read_message_id: messageId ?? null,
+        last_read_at: new Date().toISOString(),
+      },
+      { onConflict: 'user_id,channel_id,conversation_id' }
+    );
   }
+}
+
+/**
+ * Fetch unread counts (DMs + channels + mentions) for the current user.
+ * Returns a map keyed by conversation_id or channel_id.
+ */
+export async function fetchUnreadCounts(): Promise<{
+  byConversation: Map<string, { count: number; mention: boolean }>;
+  byChannel: Map<string, { count: number; mention: boolean }>;
+}> {
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc('fetch_unread_counts');
+  if (error || !data) {
+    return { byConversation: new Map(), byChannel: new Map() };
+  }
+  const byConversation = new Map<string, { count: number; mention: boolean }>();
+  const byChannel = new Map<string, { count: number; mention: boolean }>();
+  for (const row of data as any[]) {
+    if (row.conversation_id) {
+      byConversation.set(row.conversation_id, {
+        count: row.unread_count ?? 0,
+        mention: !!row.has_mention,
+      });
+    } else if (row.channel_id) {
+      byChannel.set(row.channel_id, {
+        count: row.unread_count ?? 0,
+        mention: !!row.has_mention,
+      });
+    }
+  }
+  return { byConversation, byChannel };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// PRIVATE ATTACHMENTS — upload to private Storage, create attachments
+// record, fetch via short-lived signed URLs.
+// ─────────────────────────────────────────────────────────────────────
+
+export interface AttachmentRecord {
+  id: string;
+  message_id: string | null;
+  owner_id: string;
+  storage_path: string;
+  file_name: string | null;
+  original_filename: string | null;
+  mime_type: string | null;
+  file_size: number | null;
+  width: number | null;
+  height: number | null;
+  duration_seconds: number | null;
+  thumbnail_path: string | null;
+  created_at: string;
+}
+
+const ATTACHMENT_BUCKET = 'attachments';
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
+const ALLOWED_MIME_PREFIXES = [
+  'image/', 'video/', 'audio/', 'application/pdf', 'text/plain',
+  'application/zip', 'application/msword',
+  'application/vnd.openxmlformats-officedocument',
+];
+
+export function validateAttachment(file: File): string | null {
+  if (file.size > MAX_ATTACHMENT_BYTES) return 'File too large (max 25 MB)';
+  if (file.size === 0) return 'File is empty';
+  const ok = ALLOWED_MIME_PREFIXES.some((p) => file.type.startsWith(p));
+  if (!ok) return `File type "${file.type || 'unknown'}" is not allowed`;
+  return null;
+}
+
+/**
+ * Upload a file to the private attachments bucket under the user's own folder.
+ * Returns the storage_path (relative to bucket) — NOT a public URL.
+ */
+export async function uploadPrivateAttachment(
+  file: File,
+  ownerUserId: string,
+  onProgress?: (sent: number, total: number) => void
+): Promise<{ path: string; mimeType: string; size: number; width?: number; height?: number; duration?: number } | null> {
+  const validationError = validateAttachment(file);
+  if (validationError) {
+    toast.error(validationError);
+    return null;
+  }
+  const supabase = createClient();
+  const ext = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '') || 'bin';
+  const sanitized = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const path = `${ownerUserId}/${sanitized}`;
+
+  // Supabase JS v2 doesn't support per-chunk progress callbacks; simulate via file size.
+  // For real progress we'd need a custom XHR. For now, call onProgress once at start and once at end.
+  onProgress?.(0, file.size);
+
+  const { error } = await supabase.storage
+    .from(ATTACHMENT_BUCKET)
+    .upload(path, file, {
+      cacheControl: '3600',
+      upsert: false,
+      contentType: file.type || 'application/octet-stream',
+    });
+  if (error) {
+    toast.error(`Upload failed: ${error.message}`);
+    return null;
+  }
+  onProgress?.(file.size, file.size);
+
+  // For images, capture dimensions
+  let width: number | undefined;
+  let height: number | undefined;
+  if (file.type.startsWith('image/')) {
+    try {
+      const dims = await getImageDimensions(file);
+      width = dims.width;
+      height = dims.height;
+    } catch { /* non-fatal */ }
+  }
+
+  // For audio/video, capture duration
+  let duration: number | undefined;
+  if (file.type.startsWith('audio/') || file.type.startsWith('video/')) {
+    try {
+      duration = await getMediaDuration(file);
+    } catch { /* non-fatal */ }
+  }
+
+  return { path, mimeType: file.type, size: file.size, width, height, duration };
+}
+
+function getImageDimensions(file: File): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      resolve({ width: img.naturalWidth, height: img.naturalHeight });
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = (e) => { URL.revokeObjectURL(url); reject(e); };
+    img.src = url;
+  });
+}
+
+function getMediaDuration(file: File): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const el = file.type.startsWith('audio/')
+      ? new Audio()
+      : document.createElement('video');
+    el.preload = 'metadata';
+    el.onloadedmetadata = () => {
+      const d = el.duration;
+      URL.revokeObjectURL(url);
+      resolve(d);
+    };
+    el.onerror = (e) => { URL.revokeObjectURL(url); reject(e); };
+    el.src = url;
+  });
+}
+
+/**
+ * Create an `attachments` row linking a stored file to a message.
+ * Server-side RLS enforces that owner_id = auth.uid() and message_id belongs to a
+ * conversation/channel the user is a member of.
+ */
+export async function createAttachmentRecord(opts: {
+  messageId: string;
+  ownerId: string;
+  storagePath: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  width?: number;
+  height?: number;
+  duration?: number;
+}): Promise<AttachmentRecord | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase.from('attachments').insert({
+    message_id: opts.messageId,
+    owner_id: opts.ownerId,
+    storage_path: opts.storagePath,
+    file_name: opts.fileName,
+    original_filename: opts.fileName,
+    mime_type: opts.mimeType,
+    file_size: opts.fileSize,
+    width: opts.width ?? null,
+    height: opts.height ?? null,
+    duration_seconds: opts.duration ?? null,
+  }).select().maybeSingle();
+  if (error) {
+    console.error('createAttachmentRecord failed', error);
+    toast.error(`Attachment record failed: ${error.message}`);
+    return null;
+  }
+  return data as AttachmentRecord;
+}
+
+/**
+ * Fetch authorized attachments for a batch of message IDs.
+ * Uses the SECURITY DEFINER `fetch_message_attachments` RPC so the server
+ * only returns attachments the caller is allowed to see.
+ */
+export async function fetchAttachmentsForMessages(
+  messageIds: string[]
+): Promise<Map<string, AttachmentRecord[]>> {
+  if (messageIds.length === 0) return new Map();
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc('fetch_message_attachments', {
+    p_message_ids: messageIds,
+  });
+  if (error) {
+    console.warn('fetch_message_attachments failed', error);
+    return new Map();
+  }
+  const map = new Map<string, AttachmentRecord[]>();
+  for (const row of (data as AttachmentRecord[]) || []) {
+    if (!row.message_id) continue;
+    const list = map.get(row.message_id) || [];
+    list.push(row);
+    map.set(row.message_id, list);
+  }
+  return map;
+}
+
+/**
+ * Get a short-lived signed URL for downloading / previewing a private attachment.
+ * URL expires after `expiresIn` seconds (default 60).
+ */
+export async function getSignedAttachmentUrl(
+  storagePath: string,
+  expiresIn = 60
+): Promise<string | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase.storage
+    .from(ATTACHMENT_BUCKET)
+    .createSignedUrl(storagePath, expiresIn);
+  if (error || !data?.signedUrl) {
+    console.warn('createSignedUrl failed', error);
+    return null;
+  }
+  return data.signedUrl;
+}
+
+/**
+ * Delete an owned attachment record + the underlying Storage object.
+ */
+export async function deleteOwnedAttachment(
+  attachmentId: string,
+  storagePath: string
+): Promise<boolean> {
+  const supabase = createClient();
+  // Delete Storage object first (owner has DELETE on their own folder).
+  const { error: storageErr } = await supabase.storage
+    .from(ATTACHMENT_BUCKET)
+    .remove([storagePath]);
+  if (storageErr) {
+    console.warn('storage remove failed (continuing to delete DB record)', storageErr);
+  }
+  // Delete DB record via RPC (server checks owner_id = auth.uid()).
+  const { error } = await supabase.rpc('delete_owned_attachment', {
+    p_attachment_id: attachmentId,
+  });
+  if (error) {
+    toast.error(`Could not delete attachment: ${error.message}`);
+    return false;
+  }
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// COMMUNITY INVITES — create, list, revoke, join atomically.
+// ─────────────────────────────────────────────────────────────────────
+
+export interface CommunityInviteRow {
+  id: string;
+  community_id: string;
+  code: string;
+  created_by: string;
+  max_uses: number | null;
+  uses: number;
+  expires_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export async function createCommunityInvite(opts: {
+  communityId: string;
+  maxUses?: number | null;
+  expiresInHours?: number | null;
+}): Promise<CommunityInviteRow | null> {
+  const supabase = createClient();
+  const expiresAt = opts.expiresInHours
+    ? new Date(Date.now() + opts.expiresInHours * 3600 * 1000).toISOString()
+    : null;
+  const { data, error } = await supabase.rpc('create_community_invite', {
+    p_community_id: opts.communityId,
+    p_max_uses: opts.maxUses ?? null,
+    p_expires_at: expiresAt,
+  });
+  if (error) {
+    toast.error(`Could not create invite: ${error.message}`);
+    return null;
+  }
+  // Fetch the created invite row by id
+  const { data: row, error: fetchErr } = await supabase
+    .from('community_invites')
+    .select('*')
+    .eq('id', data as string)
+    .maybeSingle();
+  if (fetchErr || !row) {
+    console.warn('created invite but could not fetch row', fetchErr);
+    return null;
+  }
+  return row as CommunityInviteRow;
+}
+
+export async function listCommunityInvites(communityId: string): Promise<CommunityInviteRow[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase
+    .from('community_invites')
+    .select('*')
+    .eq('community_id', communityId)
+    .order('created_at', { ascending: false });
+  if (error) {
+    console.warn('listCommunityInvites failed', error);
+    return [];
+  }
+  return (data || []) as CommunityInviteRow[];
+}
+
+export async function revokeCommunityInvite(inviteId: string): Promise<boolean> {
+  const supabase = createClient();
+  const { error } = await supabase.rpc('revoke_community_invite', {
+    p_invite_id: inviteId,
+  });
+  if (error) {
+    toast.error(`Could not revoke invite: ${error.message}`);
+    return false;
+  }
+  toast.success('Invite revoked');
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// CHANNEL CATEGORIES — create, reorder, delete channels safely.
+// ─────────────────────────────────────────────────────────────────────
+
+export async function createChannelCategory(communityId: string, name: string): Promise<string | null> {
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc('create_channel_category', {
+    p_community_id: communityId,
+    p_name: name,
+  });
+  if (error) {
+    toast.error(`Could not create category: ${error.message}`);
+    return null;
+  }
+  return data as string;
+}
+
+export async function deleteChannelSafely(channelId: string): Promise<boolean> {
+  const supabase = createClient();
+  const { error } = await supabase.rpc('delete_channel', {
+    p_channel_id: channelId,
+  });
+  if (error) {
+    toast.error(`Could not delete channel: ${error.message}`);
+    return false;
+  }
+  toast.success('Channel deleted');
+  return true;
+}
+
+export async function renameChannel(channelId: string, newName: string): Promise<boolean> {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from('channels')
+    .update({ name: newName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_]/g, '') })
+    .eq('id', channelId);
+  if (error) {
+    toast.error(`Could not rename channel: ${error.message}`);
+    return false;
+  }
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// RATE LIMITING — thin wrapper around check_rate_limit RPC.
+// ─────────────────────────────────────────────────────────────────────
+
+export async function checkRateLimit(
+  action: string,
+  max: number,
+  windowSeconds: number
+): Promise<boolean> {
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc('check_rate_limit', {
+    p_action: action,
+    p_max: max,
+    p_window_seconds: windowSeconds,
+  });
+  if (error) {
+    // Fail-open: if rate limiter is unavailable, allow the action.
+    return true;
+  }
+  return !!data;
 }

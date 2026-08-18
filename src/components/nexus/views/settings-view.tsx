@@ -274,6 +274,10 @@ export function SettingsView({ mobile = false }: { mobile?: boolean }) {
           {settingsSection === 'notifications' && settings && (
             <>
               <h1 className="text-xl font-bold text-white">Notifications</h1>
+              <p className="text-xs text-muted-foreground/80 italic">
+                In-app notification preferences. Web push notifications are not yet wired —
+                the toggles below control in-app behavior only.
+              </p>
               <div className="space-y-3">
                 <ToggleRow label="Direct messages" checked={settings.notif_messages} onChange={(v) => updateSettings({ notif_messages: v })} />
                 <ToggleRow label="Mentions" checked={settings.notif_mentions} onChange={(v) => updateSettings({ notif_mentions: v })} />
@@ -321,19 +325,43 @@ export function SettingsView({ mobile = false }: { mobile?: boolean }) {
             <>
               <h1 className="text-xl font-bold text-white">Security</h1>
               <p className="text-sm text-muted-foreground">
-                End-to-end encryption keys and account security.
+                Account security and the future E2EE architecture.
               </p>
               <div className="rounded-lg bg-[#13101a] border border-white/5 p-4 space-y-2">
                 <div className="flex items-center gap-2">
                   <Lock className="h-4 w-4 text-nexus-lavender" />
-                  <span className="text-sm font-medium text-white">E2EE Identity Key</span>
+                  <span className="text-sm font-medium text-white">Current protection</span>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Your encryption keys are stored locally on this device. They never leave your device.
-                  Messages are encrypted with X25519 + XChaCha20-Poly1305.
+                  Messages, files, and calls are protected by <strong>TLS in transit</strong>,
+                  <strong> Supabase infrastructure security</strong>, and
+                  <strong> Row-Level Security (RLS)</strong> on every table. Private attachments
+                  are stored in a private bucket and only accessible via short-lived signed URLs
+                  that the server issues after verifying membership.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Calls use DTLS-SRTP for media encryption. Signaling traffic goes over the same
+                  TLS-secured Supabase realtime channel.
+                </p>
+              </div>
+              <div className="rounded-lg bg-[#13101a] border border-white/5 p-4 space-y-2">
+                <div className="flex items-center gap-2">
+                  <Lock className="h-4 w-4 text-muted-foreground/50" />
+                  <span className="text-sm font-medium text-white/70">E2EE — In Development</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  True end-to-end encryption (where even the server cannot read message contents)
+                  is <strong>not yet enabled</strong>. The architecture in
+                  <code className="text-[10px] mx-1">src/lib/crypto/e2ee.ts</code> exists as a
+                  future-protocol stub using libsodium primitives (X25519 + XChaCha20-Poly1305),
+                  but it is not wired into the message flow yet.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  When E2EE ships it will use established, audited protocols — no homemade
+                  cryptography. Until then, do not send highly sensitive content over NM NEXUS.
                 </p>
                 <p className="text-xs text-muted-foreground/70 font-mono">
-                  {settings?.identity_key_public ? settings.identity_key_public.slice(0, 32) + '…' : 'Not yet generated'}
+                  {settings?.identity_key_public ? settings.identity_key_public.slice(0, 32) + '…' : 'Identity key not yet generated (E2EE disabled)'}
                 </p>
               </div>
             </>
