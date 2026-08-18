@@ -1,19 +1,32 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
+/**
+ * NM NEXUS — Capacitor (Android) configuration.
+ *
+ * This app is a Next.js SSR application deployed to Cloudflare Workers.
+ * The APK is a WebView shell that loads the live deployment — this gives
+ * users the latest version automatically, no static export required.
+ *
+ * Build the APK:
+ *   cd /home/z/my-project
+ *   bun run build:android
+ *
+ * The output APK is at android/app/build/outputs/apk/debug/app-debug.apk
+ */
 const config: CapacitorConfig = {
   appId: 'studio.nightmare.nexus',
   appName: 'NM NEXUS',
-  webDir: 'out',                  // Next.js static export output
+  webDir: 'public',  // fallback static assets (PWA icons/manifest)
   bundledWebRuntime: false,
   backgroundColor: '#07060c',
   android: {
     allowMixedContent: false,
     captureInput: true,
-    webContentsDebuggingEnabled: false,  // false in production builds
+    webContentsDebuggingEnabled: false,
   },
   plugins: {
     SplashScreen: {
-      launchShowDuration: 1200,
+      launchShowDuration: 1500,
       launchAutoHide: true,
       backgroundColor: '#07060c',
       androidSplashResourceName: 'splash',
@@ -38,9 +51,9 @@ const config: CapacitorConfig = {
     },
   },
   server: {
-    // For development: point at your dev server. For production builds, leave unset
-    // and bundle the static export.
-    // androidScheme: 'https',
+    // Live deployment — APK always loads the latest version from Cloudflare.
+    url: 'https://nm-nexus.ojaskhanna432.workers.dev',
+    cleartext: false,
   },
 };
 

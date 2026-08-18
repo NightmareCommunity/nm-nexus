@@ -19,6 +19,7 @@ interface AuthState {
   init: () => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<{ error: string | null }>;
   signUpWithEmail: (email: string, password: string, username?: string) => Promise<{ error: string | null }>;
+  signInWithGoogle: () => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   updateProfile: (patch: Partial<Profile>) => Promise<{ error: string | null }>;
@@ -92,6 +93,31 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
     }
     set({ loading: false });
+    return { error: null };
+  },
+
+  signInWithGoogle: async () => {
+    set({ loading: true, error: null });
+    const supabase = createClient();
+    const redirectTo =
+      typeof window !== 'undefined'
+        ? `${window.location.origin}/auth/callback`
+        : undefined;
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo,
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
+        },
+      },
+    });
+    if (error) {
+      set({ loading: false, error: error.message });
+      return { error: error.message };
+    }
+    // Browser will redirect — no need to clear loading state here.
     return { error: null };
   },
 

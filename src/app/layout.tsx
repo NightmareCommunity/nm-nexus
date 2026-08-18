@@ -26,8 +26,12 @@ export const metadata: Metadata = {
     title: "NM NEXUS",
   },
   icons: {
-    icon: "/icon.svg",
-    apple: "/icon.svg",
+    icon: [
+      { url: "/logo.png", type: "image/png", sizes: "1024x1024" },
+      { url: "/icon.svg", type: "image/svg+xml" },
+    ],
+    apple: [{ url: "/logo.png", sizes: "1024x1024" }],
+    shortcut: ["/logo.png"],
   },
   openGraph: {
     title: "NM NEXUS",
