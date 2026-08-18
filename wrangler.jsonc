@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nm-nexus",
+  "compatibility_date": "2026-08-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": ".open-next/worker.js",
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "vars": {
+    "NEXT_PUBLIC_APP_NAME": "NM NEXUS",
+    "NEXT_PUBLIC_APP_URL": "https://nm-nexus.ojaskhanna432.workers.dev",
+    "NEXT_PUBLIC_STUN_URLS": "stun:stun.l.google.com:19302"
+  },
+  "observability": {
+    "enabled": true
+  }
+}
