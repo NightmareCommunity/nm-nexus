@@ -1,0 +1,95 @@
+# NM NEXUS — Environment & Secrets
+
+# ── Dependencies ──
+node_modules/
+.pnp
+.pnp.js
+bun.lockb
+
+# ── Next.js ──
+.next/
+out/
+build/
+dist/
+
+# ── Production ──
+.vercel
+.wrangler
+.wrangler/
+.open-next/
+
+# ── Env / secrets — NEVER commit ──
+.env
+.env.*
+!.env.example
+.env.local
+.env.production
+.env.development
+
+# ── Credential files — NEVER commit ──
+*.txt
+!README.txt
+MAIN.txt
+credentials*
+secrets*
+*.pem
+*.key
+*.p12
+*.keystore
+*.jks
+service-account*.json
+
+# ── Supabase ──
+supabase/.branches
+supabase/.temp
+
+# ── Android / Capacitor ──
+android/
+android-release/
+*.apk
+*.aab
+*.keystore
+!keystore.example
+capacitor.config.local.json
+
+# ── Builds / releases ──
+releases/
+*.tar
+*.zip
+
+# ── Logs ──
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev.log
+server.log
+
+# ── Internal scaffolding (not part of NM NEXUS source) ──
+skills/
+.zscripts/
+examples/
+mini-services/
+tests/
+Caddyfile
+
+# ── Editor / OS ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# ── Testing ──
+coverage/
+.nyc_output
+
+# ── Uploads (local dev scratch) ──
+uploads/
+upload/
+tmp/
+
+# ── Local DB ──
+db/*.db
+db/*.db-journal

@@ -1,0 +1,25 @@
+{
+  "name": "NM NEXUS",
+  "short_name": "NEXUS",
+  "description": "Secure realtime communication by NIGHTMARE STUDIOS",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#07060c",
+  "theme_color": "#07060c",
+  "orientation": "portrait-primary",
+  "categories": ["communication", "social"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

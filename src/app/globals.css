@@ -1,0 +1,223 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+
+  /* NM NEXUS brand tokens */
+  --color-nexus-black: var(--nexus-black);
+  --color-nexus-night: var(--nexus-night);
+  --color-nexus-deep: var(--nexus-deep);
+  --color-nexus-purple: var(--nexus-purple);
+  --color-nexus-violet: var(--nexus-violet);
+  --color-nexus-lavender: var(--nexus-lavender);
+  --color-nexus-gold: var(--nexus-gold);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  /* NM NEXUS — premium dark palette (default = dark) */
+  --radius: 0.75rem;
+
+  --nexus-black: #07060c;          /* base */
+  --nexus-night: #0d0a1a;          /* sidebar / card */
+  --nexus-deep:  #14102a;          /* elevated surface */
+  --nexus-purple: #5b21b6;         /* deep purple — primary */
+  --nexus-violet: #7c3aed;         /* vivid violet — accent */
+  --nexus-lavender: #c4b5fd;       /* soft lavender — text highlight */
+  --nexus-gold: #d4af37;           /* subtle gold — premium accents */
+
+  --background: oklch(0.08 0.02 280);
+  --foreground: oklch(0.96 0.01 280);
+  --card: oklch(0.13 0.03 280);
+  --card-foreground: oklch(0.96 0.01 280);
+  --popover: oklch(0.15 0.04 280);
+  --popover-foreground: oklch(0.96 0.01 280);
+  --primary: oklch(0.55 0.25 290);
+  --primary-foreground: oklch(0.98 0.01 280);
+  --secondary: oklch(0.20 0.04 280);
+  --secondary-foreground: oklch(0.96 0.01 280);
+  --muted: oklch(0.18 0.03 280);
+  --muted-foreground: oklch(0.68 0.04 280);
+  --accent: oklch(0.28 0.10 290);
+  --accent-foreground: oklch(0.96 0.01 280);
+  --destructive: oklch(0.62 0.22 22);
+  --border: oklch(0.25 0.04 280 / 60%);
+  --input: oklch(0.22 0.04 280);
+  --ring: oklch(0.55 0.25 290);
+  --chart-1: oklch(0.55 0.25 290);
+  --chart-2: oklch(0.70 0.20 70);
+  --chart-3: oklch(0.75 0.18 320);
+  --chart-4: oklch(0.65 0.18 200);
+  --chart-5: oklch(0.80 0.15 50);
+  --sidebar: oklch(0.10 0.02 280);
+  --sidebar-foreground: oklch(0.96 0.01 280);
+  --sidebar-primary: oklch(0.55 0.25 290);
+  --sidebar-primary-foreground: oklch(0.98 0.01 280);
+  --sidebar-accent: oklch(0.20 0.04 280);
+  --sidebar-accent-foreground: oklch(0.96 0.01 280);
+  --sidebar-border: oklch(0.25 0.04 280 / 50%);
+  --sidebar-ring: oklch(0.55 0.25 290);
+}
+
+.dark {
+  /* Same as :root — NM NEXUS is dark by default */
+  --background: oklch(0.08 0.02 280);
+  --foreground: oklch(0.96 0.01 280);
+  --card: oklch(0.13 0.03 280);
+  --card-foreground: oklch(0.96 0.01 280);
+  --popover: oklch(0.15 0.04 280);
+  --popover-foreground: oklch(0.96 0.01 280);
+  --primary: oklch(0.55 0.25 290);
+  --primary-foreground: oklch(0.98 0.01 280);
+  --secondary: oklch(0.20 0.04 280);
+  --secondary-foreground: oklch(0.96 0.01 280);
+  --muted: oklch(0.18 0.03 280);
+  --muted-foreground: oklch(0.68 0.04 280);
+  --accent: oklch(0.28 0.10 290);
+  --accent-foreground: oklch(0.96 0.01 280);
+  --destructive: oklch(0.62 0.22 22);
+  --border: oklch(0.25 0.04 280 / 60%);
+  --input: oklch(0.22 0.04 280);
+  --ring: oklch(0.55 0.25 290);
+  --sidebar: oklch(0.10 0.02 280);
+  --sidebar-foreground: oklch(0.96 0.01 280);
+  --sidebar-primary: oklch(0.55 0.25 290);
+  --sidebar-primary-foreground: oklch(0.98 0.01 280);
+  --sidebar-accent: oklch(0.20 0.04 280);
+  --sidebar-accent-foreground: oklch(0.96 0.01 280);
+  --sidebar-border: oklch(0.25 0.04 280 / 50%);
+  --sidebar-ring: oklch(0.55 0.25 290);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html, body {
+    @apply bg-background text-foreground;
+    height: 100%;
+    overscroll-behavior: none;
+  }
+  body {
+    background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(124, 58, 237, 0.15), transparent 60%),
+      radial-gradient(900px 500px at -10% 100%, rgba(91, 33, 182, 0.10), transparent 60%),
+      var(--background);
+    background-attachment: fixed;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   Glass + premium effects — used sparingly, never on hot paths.
+   ────────────────────────────────────────────────────────────────── */
+@layer components {
+  .nexus-glass {
+    background: linear-gradient(135deg, rgba(20, 16, 42, 0.7), rgba(13, 10, 26, 0.85));
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+    border: 1px solid rgba(196, 181, 253, 0.08);
+  }
+  .nexus-glass-strong {
+    background: linear-gradient(135deg, rgba(20, 16, 42, 0.85), rgba(13, 10, 26, 0.92));
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    border: 1px solid rgba(196, 181, 253, 0.12);
+  }
+  .nexus-gold-text {
+    background: linear-gradient(135deg, #d4af37 0%, #f5e1a4 50%, #d4af37 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .nexus-violet-text {
+    background: linear-gradient(135deg, #7c3aed 0%, #c4b5fd 50%, #7c3aed 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .nexus-glow-violet {
+    box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.4), 0 0 24px -2px rgba(124, 58, 237, 0.6);
+  }
+  .nexus-glow-gold {
+    box-shadow: 0 0 0 1px rgba(212, 175, 55, 0.4), 0 0 24px -2px rgba(212, 175, 55, 0.4);
+  }
+  .nexus-pressable {
+    transition: transform 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+  }
+  .nexus-pressable:active {
+    transform: translateY(1px) scale(0.99);
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   Custom scrollbar — slim, themed
+   ────────────────────────────────────────────────────────────────── */
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(124, 58, 237, 0.4) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: rgba(124, 58, 237, 0.35);
+    border-radius: 3px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(124, 58, 237, 0.6);
+  }
+}
+
+/* Reduced motion — respect user setting */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

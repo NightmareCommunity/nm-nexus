@@ -1,0 +1,32 @@
+name = "nm-nexus"
+compatibility_date = "2026-08-18"
+compatibility_flags = ["nodejs_compat"]
+
+# ─────────────────────────────────────────────────────────────────────
+# NM NEXUS — Cloudflare Workers deployment config (OpenNext adapter)
+#
+# Build command:
+#   bun run build:cf
+#
+# Deploy command:
+#   bun run deploy:cf
+#
+# Or via wrangler directly:
+#   npx opennextjs-cloudflare build
+#   npx wrangler cloudflare deploy
+# ─────────────────────────────────────────────────────────────────────
+
+main = ".open-next/worker.js"
+assets = { directory = ".open-next/assets", binding = "ASSETS" }
+
+[vars]
+NEXT_PUBLIC_APP_NAME = "NM NEXUS"
+NEXT_PUBLIC_APP_URL = "https://nm-nexus.nightmarecommunity.workers.dev"
+NEXT_PUBLIC_STUN_URLS = "stun:stun.l.google.com:19302"
+
+# Secrets (set via: npx wrangler secret put NAME)
+# Do NOT put real values here — this file is committed to Git.
+# Required secrets:
+#   - NEXT_PUBLIC_SUPABASE_URL
+#   - NEXT_PUBLIC_SUPABASE_ANON_KEY
+#   - SUPABASE_DB_URL
