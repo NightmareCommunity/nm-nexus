@@ -29,7 +29,7 @@ interface AuthState {
   clearError: () => void;
 }
 
-const INIT_TIMEOUT_MS = 8000;
+const INIT_TIMEOUT_MS = 6000; // 6 seconds — fail fast, retry cheap
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
@@ -94,7 +94,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         // Fetch profile with a timeout too — don't block init on profile failure.
         await Promise.race([
           get().refreshProfile(),
-          new Promise((resolve) => setTimeout(resolve, 5000)),
+          new Promise((resolve) => setTimeout(resolve, 4000)),
         ]);
       }
 

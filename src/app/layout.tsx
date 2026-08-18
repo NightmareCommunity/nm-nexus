@@ -15,9 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "NM NEXUS — Secure Realtime Communication",
-  description: "NM NEXUS by NIGHTMARE STUDIOS. Encrypted messaging, calls, and communities.",
-  keywords: ["NM NEXUS", "NIGHTMARE STUDIOS", "secure messaging", "E2EE", "WebRTC"],
+  title: "NM NEXUS — Realtime Communication",
+  description: "NM NEXUS by NIGHTMARE STUDIOS. Realtime messaging, calls, and communities.",
+  keywords: ["NM NEXUS", "NIGHTMARE STUDIOS", "messaging", "realtime", "WebRTC", "communities"],
   authors: [{ name: "NIGHTMARE STUDIOS" }],
   manifest: "/manifest.webmanifest",
   appleWebApp: {
@@ -35,7 +35,7 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "NM NEXUS",
-    description: "Secure realtime communication by NIGHTMARE STUDIOS",
+    description: "Realtime communication by NIGHTMARE STUDIOS",
     type: "website",
   },
 };

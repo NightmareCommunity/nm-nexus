@@ -164,7 +164,8 @@ export function SettingsView({ mobile = false }: { mobile?: boolean }) {
                 </div>
                 <div>
                   <Label className="text-xs">Email</Label>
-                  <Input value={profile ? '(private)' : ''} disabled className="bg-[#13101a] border-white/10" />
+                  <Input value={user?.email || ''} disabled className="bg-[#13101a] border-white/10" />
+                  <p className="text-[10px] text-muted-foreground mt-1">Email is managed by your auth provider.</p>
                 </div>
               </div>
             </>

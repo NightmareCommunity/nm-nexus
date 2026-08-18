@@ -84,14 +84,14 @@ export function AuthScreen() {
               <span className="nexus-violet-text">NM NEXUS</span>
             </h1>
             <p className="text-xl text-muted-foreground">
-              Encrypted messaging, calls, and communities — built for people who care.
+              Realtime messaging, calls, and communities — built for people who care.
             </p>
           </div>
           <div className="space-y-3">
             <Feature
               icon={<ShieldCheck className="h-5 w-5 text-nexus-lavender" />}
-              title="End-to-end encrypted"
-              desc="Your DMs and private groups stay between you and the people you talk to."
+              title="Realtime messaging"
+              desc="DMs, group chats, communities, and channels — all synced live across your devices."
             />
             <Feature
               icon={<Sparkles className="h-5 w-5 text-nexus-gold" />}
@@ -100,8 +100,8 @@ export function AuthScreen() {
             />
             <Feature
               icon={<Lock className="h-5 w-5 text-nexus-lavender" />}
-              title="Real security"
-              desc="X25519 + XChaCha20-Poly1305, audited primitives. No custom crypto."
+              title="Secured by Supabase"
+              desc="Row-level security on every table. Your data is isolated to your account."
             />
           </div>
         </motion.div>
@@ -222,7 +222,7 @@ export function AuthScreen() {
                 <SubmitButton loading={loading} label="Create account" />
                 <p className="text-xs text-muted-foreground text-center">
                   By creating an account you agree to keep your credentials safe.
-                  End-to-end encryption keys are generated and stored on your device.
+                  Your data is protected by Supabase row-level security.
                 </p>
               </form>
             </TabsContent>

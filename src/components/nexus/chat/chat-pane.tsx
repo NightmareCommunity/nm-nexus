@@ -583,6 +583,7 @@ export function ChatPane({ mobile = false }: { mobile?: boolean }) {
                     isEditing={editingId === m.id}
                     onReact={(emoji) => toggleReaction(m.id, emoji)}
                     onSenderClick={() => sender && setActiveProfileUserId(sender.id)}
+                    currentUserId={user?.id}
                   />
                 </div>
               );
@@ -739,10 +740,11 @@ interface MessageRowProps {
   isEditing: boolean;
   onReact: (emoji: string) => void;
   onSenderClick: () => void;
+  currentUserId?: string;
 }
 
 function MessageRow({
-  message, isMine, showHeader, sender, onReply, onEdit, onDelete, onSaveEdit, isEditing, onReact, onSenderClick
+  message, isMine, showHeader, sender, onReply, onEdit, onDelete, onSaveEdit, isEditing, onReact, onSenderClick, currentUserId
 }: MessageRowProps) {
   const [editText, setEditText] = useState(message.body);
   const [showReactionPicker, setShowReactionPicker] = useState(false);
@@ -818,7 +820,7 @@ function MessageRow({
                   onClick={() => onReact(r.reaction)}
                   className={cn(
                     'flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs border',
-                    r.users.includes(/* user.id */ '')
+                    r.users.includes(currentUserId || '')
                       ? 'bg-nexus-violet/20 border-nexus-violet/50'
                       : 'bg-white/5 border-white/10 hover:bg-white/10'
                   )}

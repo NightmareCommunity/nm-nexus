@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useAuthStore } from '@/lib/stores/auth-store';
 import { useUIStore } from '@/lib/stores/ui-store';
 import { createClient } from '@/lib/supabase/client';
@@ -11,9 +11,13 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { Plus, Compass, Users, Hash, Volume2, LogOut, Trash2, Copy } from 'lucide-react';
+import { Plus, Compass, Users, LogOut, Copy, Hash, Volume2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
+import {
+  createCommunity as createCommunityRpc,
+  joinCommunityByInvite,
+  leaveCommunity as leaveCommunityRpc,
+} from '@/lib/nexus-helpers';
 
 type Community = Database['public']['Tables']['communities']['Row'];
 
@@ -28,105 +32,85 @@ export function CommunitiesView({ mobile = false }: { mobile?: boolean }) {
   const [joinCode, setJoinCode] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!user) return;
     const supabase = createClient();
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('community_members')
       .select('community_id, communities!inner(*)')
       .eq('user_id', user.id);
-    setCommunities((data || []).map((d: any) => d.communities as Community));
-  };
-
-  useEffect(() => { load(); }, [user]);
-
-  const createCommunity = async () => {
-    if (!user || !newName.trim()) return;
-    setLoading(true);
-    const supabase = createClient();
-    const slug = newName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 30);
-    const { data: comm, error } = await supabase
-      .from('communities')
-      .insert({
-        owner_id: user.id,
-        name: newName.trim(),
-        slug,
-        description: newDesc.trim() || null,
-        is_public: true,
-      })
-      .select()
-      .single();
-    if (error) { toast.error(error.message); setLoading(false); return; }
-    // Add owner as member with 'owner' role
-    await supabase.from('community_members').insert({
-      community_id: comm.id,
-      user_id: user.id,
-      role: 'owner',
-    });
-    // Create default channels
-    await supabase.from('channels').insert([
-      { community_id: comm.id, name: 'general', type: 'text', position: 0 },
-      { community_id: comm.id, name: 'announcements', type: 'text', position: 1 },
-      { community_id: comm.id, name: 'lounge', type: 'voice', position: 2 },
-    ]);
-    toast.success('Community created');
-    setCreateOpen(false);
-    setNewName('');
-    setNewDesc('');
-    setLoading(false);
-    load();
-    // Navigate to it
-    setActiveCommunity(comm.id);
-    setActiveView('communities');
-  };
-
-  const joinCommunity = async () => {
-    if (!user || !joinCode.trim()) return;
-    setLoading(true);
-    const supabase = createClient();
-    const { data: comm, error: findErr } = await supabase
-      .from('communities')
-      .select('*')
-      .eq('invite_code', joinCode.trim())
-      .maybeSingle();
-    if (findErr || !comm) {
-      toast.error('Community not found with that invite code');
-      setLoading(false);
+    if (error) {
+      console.error('load communities failed', error);
       return;
     }
-    const { error: joinErr } = await supabase.from('community_members').insert({
-      community_id: comm.id,
-      user_id: user.id,
-      role: 'member',
-    });
-    if (joinErr) {
-      if (joinErr.code === '23505') toast.error('Already a member');
-      else toast.error(joinErr.message);
-    } else {
-      toast.success(`Joined ${comm.name}`);
-      setJoinOpen(false);
-      setJoinCode('');
-      load();
-    }
-    setLoading(false);
-  };
+    setCommunities((data || []).map((d: any) => d.communities as Community));
+  }, [user]);
 
-  const leaveCommunity = async (id: string) => {
+  useEffect(() => { load(); }, [load]);
+
+  // Realtime: refresh on any community membership change for this user
+  useEffect(() => {
     if (!user) return;
     const supabase = createClient();
-    await supabase.from('community_members')
-      .delete()
-      .eq('community_id', id)
-      .eq('user_id', user.id);
-    toast.success('Left community');
-    load();
+    const channel = supabase
+      .channel(`communities-${user.id}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'community_members', filter: `user_id=eq.${user.id}` },
+        () => load()
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'communities' },
+        () => load()
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [user, load]);
+
+  const handleCreate = async () => {
+    if (!newName.trim()) return;
+    setLoading(true);
+    const id = await createCommunityRpc({
+      name: newName.trim(),
+      description: newDesc.trim() || undefined,
+      isPublic: true,
+    });
+    setLoading(false);
+    if (id) {
+      setCreateOpen(false);
+      setNewName('');
+      setNewDesc('');
+      await load();
+      setActiveCommunity(id);
+      setActiveView('communities');
+    }
+  };
+
+  const handleJoin = async () => {
+    if (!joinCode.trim()) return;
+    setLoading(true);
+    const id = await joinCommunityByInvite(joinCode.trim());
+    setLoading(false);
+    if (id) {
+      setJoinOpen(false);
+      setJoinCode('');
+      await load();
+      setActiveCommunity(id);
+      setActiveView('communities');
+    }
+  };
+
+  const handleLeave = async (id: string) => {
+    if (!confirm('Leave this community? You will need a new invite to rejoin.')) return;
+    const ok = await leaveCommunityRpc(id);
+    if (ok) load();
   };
 
   const openCommunity = (c: Community) => {
     setActiveCommunity(c.id);
     setActiveChannel(null, c.id);
     setActiveView('communities');
-    // The channel sidebar will pick this up
   };
 
   return (
@@ -168,21 +152,34 @@ export function CommunitiesView({ mobile = false }: { mobile?: boolean }) {
         ) : (
           communities.map((c) => (
             <div key={c.id} className="rounded-xl bg-[#13101a] border border-white/5 overflow-hidden hover:border-nexus-violet/30 transition-colors">
-              <div className="h-20 bg-gradient-to-br from-nexus-violet/30 to-nexus-lavender/10 relative">
-                {c.icon && (
+              <div className="h-20 bg-gradient-to-br from-nexus-violet/30 to-nexus-lavender/10 relative flex items-center justify-center">
+                {c.icon ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={c.icon} alt="" className="absolute inset-0 h-full w-full object-cover opacity-50" />
+                ) : (
+                  <span className="text-3xl font-bold text-white/80">{c.name.slice(0, 2).toUpperCase()}</span>
                 )}
               </div>
               <div className="p-4">
-                <h3 className="font-bold text-white">{c.name}</h3>
+                <h3 className="font-bold text-white flex items-center gap-2">
+                  {c.name}
+                  {c.is_verified && <span className="text-xs text-nexus-gold">✓</span>}
+                </h3>
                 <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{c.description || 'No description'}</p>
+                <div className="mt-2 text-xs text-muted-foreground flex items-center gap-3">
+                  <span className="flex items-center gap-1">
+                    <Users className="h-3 w-3" /> {c.member_count || 0}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Hash className="h-3 w-3" /> channels
+                  </span>
+                </div>
                 <div className="mt-3 flex items-center gap-2">
                   <Button size="sm" onClick={() => openCommunity(c)} className="gap-1 bg-nexus-violet hover:bg-nexus-violet/80">
                     Open
                   </Button>
                   {c.owner_id !== user?.id && (
-                    <Button size="sm" variant="ghost" onClick={() => leaveCommunity(c.id)} className="gap-1 text-destructive">
+                    <Button size="sm" variant="ghost" onClick={() => handleLeave(c.id)} className="gap-1 text-destructive">
                       <LogOut className="h-3 w-3" /> Leave
                     </Button>
                   )}
@@ -191,9 +188,14 @@ export function CommunitiesView({ mobile = false }: { mobile?: boolean }) {
                     variant="ghost"
                     className="ml-auto"
                     onClick={() => {
-                      navigator.clipboard.writeText(c.invite_code || '');
-                      toast.success('Invite code copied');
+                      if (c.invite_code) {
+                        navigator.clipboard.writeText(c.invite_code);
+                        toast.success('Invite code copied');
+                      } else {
+                        toast.error('No invite code available');
+                      }
                     }}
+                    title="Copy invite code"
                   >
                     <Copy className="h-3 w-3" />
                   </Button>
@@ -213,17 +215,20 @@ export function CommunitiesView({ mobile = false }: { mobile?: boolean }) {
           <div className="space-y-3">
             <div>
               <Label className="text-xs">Name</Label>
-              <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="NM Gaming" className="bg-[#0a0810] border-white/10" />
+              <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="NM Gaming" className="bg-[#0a0810] border-white/10" maxLength={50} />
             </div>
             <div>
               <Label className="text-xs">Description (optional)</Label>
-              <Input value={newDesc} onChange={(e) => setNewDesc(e.target.value)} placeholder="A place to hang out" className="bg-[#0a0810] border-white/10" />
+              <Input value={newDesc} onChange={(e) => setNewDesc(e.target.value)} placeholder="A place to hang out" className="bg-[#0a0810] border-white/10" maxLength={280} />
             </div>
+            <p className="text-xs text-muted-foreground">
+              Your community will be created with default channels (#announcements, #rules, #general, #media) and a voice channel (🔊 Lounge). An invite code will be generated automatically.
+            </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button onClick={createCommunity} disabled={loading || !newName.trim()} className="bg-nexus-violet hover:bg-nexus-violet/80">
-              Create
+            <Button onClick={handleCreate} disabled={loading || !newName.trim()} className="bg-nexus-violet hover:bg-nexus-violet/80">
+              {loading ? 'Creating…' : 'Create'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -238,13 +243,22 @@ export function CommunitiesView({ mobile = false }: { mobile?: boolean }) {
           <div className="space-y-3">
             <div>
               <Label className="text-xs">Invite Code</Label>
-              <Input value={joinCode} onChange={(e) => setJoinCode(e.target.value)} placeholder="abc123def4" className="bg-[#0a0810] border-white/10" />
+              <Input
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value)}
+                placeholder="abc123de"
+                className="bg-[#0a0810] border-white/10 font-mono"
+                autoFocus
+              />
             </div>
+            <p className="text-xs text-muted-foreground">
+              Paste an invite code you received from a community owner.
+            </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setJoinOpen(false)}>Cancel</Button>
-            <Button onClick={joinCommunity} disabled={loading || !joinCode.trim()} className="bg-nexus-violet hover:bg-nexus-violet/80">
-              Join
+            <Button onClick={handleJoin} disabled={loading || !joinCode.trim()} className="bg-nexus-violet hover:bg-nexus-violet/80">
+              {loading ? 'Joining…' : 'Join'}
             </Button>
           </DialogFooter>
         </DialogContent>

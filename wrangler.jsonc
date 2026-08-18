@@ -11,7 +11,10 @@
   "vars": {
     "NEXT_PUBLIC_APP_NAME": "NM NEXUS",
     "NEXT_PUBLIC_APP_URL": "https://nm-nexus.ojaskhanna432.workers.dev",
-    "NEXT_PUBLIC_STUN_URLS": "stun:stun.l.google.com:19302"
+    "NEXT_PUBLIC_STUN_URLS": "stun:stun.l.google.com:19302",
+    "NEXT_PUBLIC_SUPABASE_URL": "https://juzmgejicviennjcykxq.supabase.co",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_Wcon7nj0AlT8oYgdRxGevQ_IqY0Z2IO",
+    "NEXT_PUBLIC_GOOGLE_CLIENT_ID": "776679789908-seuootjv4s3daj6j104p56mvsj5ocdti.apps.googleusercontent.com"
   },
   "observability": {
     "enabled": true
