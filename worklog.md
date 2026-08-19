@@ -101,3 +101,22 @@ Work Log:
 Stage Summary:
 - v4.2 is now LIVE in production. The deployed Worker serves the new Settings → Security → Device Key Bundle Preview panel and the new RPCs (publish_device_keys, fetch_prekey_bundle, replenish_one_time_prekeys, revoke_device_keys, get_my_device_bundle_status) are reachable.
 - All 86 automated checks continue to pass against production. The test suite can be re-run any time via `python3 scripts/run-all-tests.py`.
+
+---
+Task ID: v4.2-client-crash-fix
+Agent: main
+Task: Fix 'Application error: a client-side exception has occurred' on production homepage after v4.2 deploy.
+
+Work Log:
+- Reproduced by fetching production URL and inspecting JS chunks — libsodium-wrappers was statically bundled into chunk 415a22e3... (1.1MB) which loads on every page.
+- The ESM build of libsodium-wrappers cannot resolve the underlying libsodium binary in the Cloudflare Workers + browser runtime, crashing the entire client bundle.
+- Fix: replaced all static imports from '@/lib/crypto/e2ee' in settings-view.tsx with a dynamic import() helper (loadE2EE). The module is now lazy-loaded ONLY when the user clicks 'Generate & publish' in Settings → Security → Device Key Bundle Preview, or when the Security section first mounts to read localStorage.
+- Rebuilt and redeployed. Verified production:
+  - Main page chunks no longer reference libsodium (was 1 chunk with it, now 0).
+  - libsodium is now isolated to its own 689KB lazy-loaded chunk (f87de0fb...).
+  - Homepage returns HTTP 200 with the loading screen rendering correctly.
+  - All 86 automated tests still pass against production (13.2s total).
+- Committed (a15de3b) and pushed to GitHub main.
+
+Stage Summary:
+- Production homepage loads cleanly. The libsodium-wrappers bundle only loads when a user actively navigates to Settings → Security AND triggers the E2EE preview panel — and even then, if it fails to load, the rest of the app continues working (the click handler catches the error and shows a toast).
