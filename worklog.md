@@ -120,3 +120,23 @@ Work Log:
 
 Stage Summary:
 - Production homepage loads cleanly. The libsodium-wrappers bundle only loads when a user actively navigates to Settings → Security AND triggers the E2EE preview panel — and even then, if it fails to load, the rest of the app continues working (the click handler catches the error and shows a toast).
+
+---
+Task ID: v4.2-supabase-env-fix
+Agent: main
+Task: Fix 'Supabase env vars missing' error on production after v4.2 deploy.
+
+Work Log:
+- Root cause: wrangler.jsonc had `"NEXT_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_Wcon7nj0AlT8oYgdRxGevQ_IqY0Z2IO"` — this is the NEW-format publishable key (not a JWT). Supabase Auth calls require the legacy anon JWT (eyJhbGci...). The new-format publishable key is for the REST API only, NOT for /auth/v1/* endpoints.
+- Also discovered that NEXT_PUBLIC_* vars are inlined into the client bundle at BUILD TIME by Next.js. The .env file only had DATABASE_URL — the build wasn't seeing the Supabase vars at all, so they weren't being baked into the client. wrangler.jsonc `vars` only injects at runtime for server-side code.
+- Fix:
+  1. Updated wrangler.jsonc to use the real anon JWT (eyJhbGci... from user-provided MAIN.txt context).
+  2. Updated .env to include all NEXT_PUBLIC_* vars so they get inlined at build time.
+- Rebuilt Next.js → verified the JWT is now in `.next/static/chunks/2d4d58ed60740bff.js` (was missing before).
+- Rebuilt OpenNext bundle and redeployed to Cloudflare Workers.
+- Verified production: client chunk `2d4d58ed60740bff.js` now contains the correct JWT, no chunks reference the old `sb_publishable_Wcon7` string.
+- Re-ran full automated test suite: 86/86 PASS in 11.3s.
+- Committed wrangler.jsonc (the .env file is correctly gitignored since it contains the anon JWT secret).
+
+Stage Summary:
+- Production now correctly bootstraps the Supabase client with the anon JWT. The 'Supabase env vars missing' error is gone. Users can sign in, sign up, and use all features.

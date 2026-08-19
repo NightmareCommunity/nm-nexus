@@ -17,7 +17,7 @@
     "NEXT_PUBLIC_TURN_USERNAME": "",
     "NEXT_PUBLIC_TURN_CREDENTIAL": "",
     "NEXT_PUBLIC_SUPABASE_URL": "https://juzmgejicviennjcykxq.supabase.co",
-    "NEXT_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_Wcon7nj0AlT8oYgdRxGevQ_IqY0Z2IO",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp1em1nZWppY3ZpZW5uamN5a3hxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY5NzE1NDcsImV4cCI6MjEwMjU0NzU0N30.zEdKBPW_FFxFwMGwlpq43oH0LsBtpBDQqFBrzpd3nQE",
     "NEXT_PUBLIC_GOOGLE_CLIENT_ID": "776679789908-seuootjv4s3daj6j104p56mvsj5ocdti.apps.googleusercontent.com"
   },
   "observability": {
