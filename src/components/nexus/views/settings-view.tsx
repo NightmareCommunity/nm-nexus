@@ -23,13 +23,34 @@ import {
   revokeDeviceKeys,
   type DeviceBundleStatus,
 } from '@/lib/nexus-helpers';
-import {
-  generateDeviceKeyBundle,
-  storeDeviceKeys,
-  loadDeviceKeys,
-  clearDeviceKeys,
-  type StoredDeviceKeys,
-} from '@/lib/crypto/e2ee';
+
+// IMPORTANT: We do NOT statically import from '@/lib/crypto/e2ee' here.
+// That module pulls in `libsodium-wrappers`, whose ESM build has trouble
+// resolving the underlying libsodium binary in the Cloudflare Workers +
+// browser runtime. Importing it at module scope causes the entire client
+// bundle to crash on page load ("Application error: a client-side exception
+// has occurred").
+//
+// Instead, we lazy-load it via dynamic `import()` ONLY when the user clicks
+// "Generate & publish" in the Security panel. This keeps libsodium out of
+// the main client chunk and isolates any resolution issues to that one
+// user-triggered code path.
+type E2EEModule = typeof import('@/lib/crypto/e2ee');
+let _e2eePromise: Promise<E2EEModule> | null = null;
+async function loadE2EE(): Promise<E2EEModule> {
+  if (!_e2eePromise) {
+    _e2eePromise = import('@/lib/crypto/e2ee');
+  }
+  return _e2eePromise;
+}
+
+// Lightweight local type mirroring StoredDeviceKeys — avoids importing
+// the type (which would also drag in the module at build time).
+interface StoredDeviceKeysLite {
+  identity: { publicKey: string; privateKey: string };
+  signedPreKey: { publicKey: string; privateKey: string; signature: string };
+  createdAt: number;
+}
 
 const SECTIONS = [
   { id: 'account', label: 'My Account', icon: User },
@@ -52,7 +73,7 @@ export function SettingsView({ mobile = false }: { mobile?: boolean }) {
 
   // ── E2EE preview state ──
   const [deviceStatus, setDeviceStatus] = useState<DeviceBundleStatus | null>(null);
-  const [localKeys, setLocalKeys] = useState<StoredDeviceKeys | null>(null);
+  const [localKeys, setLocalKeys] = useState<StoredDeviceKeysLite | null>(null);
   const [e2eeBusy, setE2eeBusy] = useState(false);
 
   useEffect(() => {
@@ -62,12 +83,31 @@ export function SettingsView({ mobile = false }: { mobile?: boolean }) {
   }, [profile]);
 
   // Load E2EE status when entering the Security section.
+  // We lazy-load the e2ee module here so the main page chunk doesn't ship
+  // libsodium-wrappers to every visitor.
   useEffect(() => {
     if (settingsSection !== 'security' || !profile?.id) return;
     void (async () => {
       const status = await getMyDeviceBundleStatus();
       setDeviceStatus(status);
-      if (profile.id) setLocalKeys(loadDeviceKeys(profile.id));
+      if (profile.id) {
+        try {
+          const e2ee = await loadE2EE();
+          const stored = e2ee.loadDeviceKeys(profile.id);
+          if (stored) {
+            setLocalKeys({
+              identity: stored.identity,
+              signedPreKey: stored.signedPreKey,
+              createdAt: stored.createdAt,
+            });
+          } else {
+            setLocalKeys(null);
+          }
+        } catch (e) {
+          console.warn('E2EE module failed to load (localStorage read)', e);
+          setLocalKeys(null);
+        }
+      }
     })();
   }, [settingsSection, profile?.id]);
 
@@ -75,13 +115,14 @@ export function SettingsView({ mobile = false }: { mobile?: boolean }) {
     if (!profile?.id) return;
     setE2eeBusy(true);
     try {
-      const bundle = await generateDeviceKeyBundle(50);
-      const stored: StoredDeviceKeys = {
+      const e2ee = await loadE2EE();
+      const bundle = await e2ee.generateDeviceKeyBundle(50);
+      const stored = {
         identity: bundle.identity,
         signedPreKey: bundle.signedPreKey,
         createdAt: bundle.createdAt,
       };
-      storeDeviceKeys(profile.id, stored);
+      e2ee.storeDeviceKeys(profile.id, stored);
       setLocalKeys(stored);
       const publishedAt = await publishDeviceKeys(
         bundle.identity.publicKey,
@@ -95,6 +136,7 @@ export function SettingsView({ mobile = false }: { mobile?: boolean }) {
         setDeviceStatus(status);
       }
     } catch (e: any) {
+      console.error('E2EE generate/publish failed', e);
       toast.error(`Failed to publish device keys: ${e?.message ?? e}`);
     } finally {
       setE2eeBusy(false);
@@ -107,7 +149,12 @@ export function SettingsView({ mobile = false }: { mobile?: boolean }) {
     try {
       const ok = await revokeDeviceKeys();
       if (ok) {
-        clearDeviceKeys(profile.id);
+        try {
+          const e2ee = await loadE2EE();
+          e2ee.clearDeviceKeys(profile.id);
+        } catch (e) {
+          console.warn('E2EE module failed to load (clear)', e);
+        }
         setLocalKeys(null);
         toast.success('Device keys revoked. New sessions cannot be established until you publish a fresh bundle.');
         const status = await getMyDeviceBundleStatus();
